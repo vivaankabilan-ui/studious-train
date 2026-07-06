@@ -29,12 +29,15 @@ const defaultPhotos = {
   w4: "assets/theo-avatar.png"
 };
 
+const API_STATE_ENDPOINT = "/api/state";
+
 let view = "landing";
 let routeMeta = {};
 let helperFilter = "All";
 let helperSearch = "";
 let helperNotice = "";
 let profileModalWorkerId = "";
+let saveQueue = Promise.resolve();
 
 function createDefaultState() {
   return {
@@ -304,19 +307,61 @@ function createDefaultState() {
   };
 }
 
-let state = loadState();
+let state = createDefaultState();
 
-function loadState() {
+function loadLocalState() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : createDefaultState();
+    return saved ? JSON.parse(saved) : null;
   } catch (error) {
-    return createDefaultState();
+    return null;
   }
 }
 
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+async function loadState() {
+  try {
+    const response = await fetch(API_STATE_ENDPOINT, {
+      headers: {
+        Accept: "application/json"
+      }
+    });
+    if (response.ok) {
+      const payload = await response.json();
+      if (payload && payload.state) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(payload.state));
+        return payload.state;
+      }
+    }
+  } catch (error) {
+    // Fall back to local storage below.
+  }
+
+  const localState = loadLocalState();
+  if (localState) return localState;
+  return createDefaultState();
+}
+
+async function saveState() {
+  const snapshot = JSON.stringify(state);
+  try {
+    localStorage.setItem(STORAGE_KEY, snapshot);
+  } catch (error) {
+    // Ignore local cache failures.
+  }
+
+  saveQueue = saveQueue
+    .then(() =>
+      fetch(API_STATE_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: snapshot
+      })
+    )
+    .catch(() => {});
+
+  return saveQueue.catch(() => {});
 }
 
 function escapeHtml(value) {
@@ -1784,4 +1829,29 @@ function bindWorkerDashboard() {
   });
 }
 
-render();
+async function bootstrap() {
+  const remoteState = await (async () => {
+    try {
+      const response = await fetch(API_STATE_ENDPOINT, {
+        headers: {
+          Accept: "application/json"
+        }
+      });
+      if (response.ok) {
+        const payload = await response.json();
+        return payload && payload.state ? payload.state : null;
+      }
+    } catch (error) {
+      return null;
+    }
+    return null;
+  })();
+
+  state = remoteState || loadLocalState() || createDefaultState();
+  render();
+  if (!remoteState) {
+    await saveState();
+  }
+}
+
+bootstrap();
