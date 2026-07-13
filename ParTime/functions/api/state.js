@@ -367,6 +367,7 @@ async function loadState(db) {
       const profile = clientProfileMap.get(user.id) || {};
       clients[user.id] = {
         id: user.id,
+        role: "client",
         name: user.name,
         email: user.email,
         phone: user.phone || "",
@@ -386,6 +387,7 @@ async function loadState(db) {
       const profile = workerProfileMap.get(user.id) || {};
       workers[user.id] = {
         id: user.id,
+        role: "worker",
         name: user.name,
         email: user.email,
         phone: user.phone || "",
@@ -416,6 +418,7 @@ async function loadState(db) {
       const profile = parentProfileMap.get(user.id) || {};
       parents[user.id] = {
         id: user.id,
+        role: "parent",
         name: user.name,
         email: user.email,
         emailVerificationCode: user.email_verification_code || "",

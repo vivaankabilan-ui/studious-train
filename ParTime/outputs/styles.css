@@ -737,6 +737,16 @@ textarea:focus {
   letter-spacing: 0.18em;
 }
 
+.verification-link {
+  color: var(--blue);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.verification-link:hover {
+  text-decoration: underline;
+}
+
 .themed-select-label select {
   border: 2px solid #8bd7c2;
   background-color: #f7fcfa;
@@ -901,6 +911,10 @@ textarea:focus {
   background: #fff7e8;
   color: #8a5a05;
   border: 1px solid rgba(247, 184, 75, 0.42);
+}
+
+.auth-banner {
+  margin-bottom: 14px;
 }
 
 .form-error {
