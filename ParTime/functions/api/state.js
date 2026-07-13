@@ -92,8 +92,8 @@ async function saveState(db, state) {
 
   for (const client of clients) {
     await db.prepare(
-      `INSERT INTO users (id, role, name, email, phone, language, location, status, created_at, updated_at)
-       VALUES (?, 'client', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      `INSERT INTO users (id, role, name, email, phone, language, location, status, password_hash, password_salt, email_verification_code, email_verification_sent_at, email_verified_at, created_at, updated_at)
+       VALUES (?, 'client', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
     ).bind(
       client.id,
       client.name || "",
@@ -101,7 +101,12 @@ async function saveState(db, state) {
       client.phone || "",
       client.language || "English",
       client.location || "",
-      formatRoleStatus("client", true)
+      formatRoleStatus("client", true),
+      client.passwordHash || "",
+      client.passwordSalt || "",
+      client.emailVerificationCode || "",
+      client.emailVerificationSentAt || "",
+      client.emailVerifiedAt || ""
     ).run();
 
     await db.prepare(
@@ -117,8 +122,8 @@ async function saveState(db, state) {
 
   for (const worker of workers) {
     await db.prepare(
-      `INSERT INTO users (id, role, name, email, phone, language, location, status, created_at, updated_at)
-       VALUES (?, 'worker', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      `INSERT INTO users (id, role, name, email, phone, language, location, status, password_hash, password_salt, email_verification_code, email_verification_sent_at, email_verified_at, created_at, updated_at)
+       VALUES (?, 'worker', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
     ).bind(
       worker.id,
       worker.name || "",
@@ -126,14 +131,19 @@ async function saveState(db, state) {
       worker.phone || "",
       worker.language || "English",
       worker.location || "",
-      formatRoleStatus("worker", worker.parentConfirmed !== false)
+      formatRoleStatus("worker", worker.parentConfirmed !== false),
+      worker.passwordHash || "",
+      worker.passwordSalt || "",
+      worker.emailVerificationCode || "",
+      worker.emailVerificationSentAt || "",
+      worker.emailVerifiedAt || ""
     ).run();
 
     const parent = parents.find((item) => item.email === worker.parentEmail || item.linkedWorkerId === worker.id);
     await db.prepare(
       `INSERT INTO worker_profiles (
-        user_id, photo_url, bio, age, school, parent_email, parent_confirmed, parent_user_id, services_offered, certifications, verified
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        user_id, photo_url, bio, age, school, parent_email, parent_confirmed, parent_user_id, services_offered, certifications, verified, parent_verification_code, parent_verification_sent_at, parent_verified_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       worker.id,
       worker.photo || "",
@@ -145,18 +155,26 @@ async function saveState(db, state) {
       parent ? parent.id : null,
       JSON.stringify(worker.services || []),
       JSON.stringify(worker.certifications || []),
-      toSqlBool(worker.parentConfirmed)
+      toSqlBool(worker.parentConfirmed),
+      worker.parentVerificationCode || "",
+      worker.parentVerificationSentAt || "",
+      worker.parentVerifiedAt || ""
     ).run();
   }
 
   for (const parent of parents) {
     await db.prepare(
-      `INSERT INTO users (id, role, name, email, phone, language, location, status, created_at, updated_at)
-       VALUES (?, 'parent', ?, ?, '', 'English', '', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      `INSERT INTO users (id, role, name, email, phone, language, location, status, password_hash, password_salt, email_verification_code, email_verification_sent_at, email_verified_at, created_at, updated_at)
+       VALUES (?, 'parent', ?, ?, '', 'English', '', 'active', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
     ).bind(
       parent.id,
       parent.name || "",
-      parent.email || ""
+      parent.email || "",
+      parent.passwordHash || "",
+      parent.passwordSalt || "",
+      parent.emailVerificationCode || "",
+      parent.emailVerificationSentAt || "",
+      parent.emailVerifiedAt || ""
     ).run();
 
     await db.prepare(
@@ -352,8 +370,13 @@ async function loadState(db) {
         name: user.name,
         email: user.email,
         phone: user.phone || "",
+        emailVerificationCode: user.email_verification_code || "",
+        emailVerificationSentAt: user.email_verification_sent_at || "",
+        emailVerifiedAt: user.email_verified_at || "",
         language: user.language || "English",
         location: user.location || "",
+        passwordHash: user.password_hash || "",
+        passwordSalt: user.password_salt || "",
         typicalServices: parseJson(profile.services_looking_for, []),
         preferredCurrency: profile.preferred_currency || "USD"
       };
@@ -366,6 +389,11 @@ async function loadState(db) {
         name: user.name,
         email: user.email,
         phone: user.phone || "",
+        emailVerificationCode: user.email_verification_code || "",
+        emailVerificationSentAt: user.email_verification_sent_at || "",
+        emailVerifiedAt: user.email_verified_at || "",
+        passwordHash: user.password_hash || "",
+        passwordSalt: user.password_salt || "",
         parentEmail: profile.parent_email || "",
         parentConfirmed: fromSqlBool(profile.parent_confirmed),
         age: Number(profile.age || 0),
@@ -376,6 +404,9 @@ async function loadState(db) {
         services: parseJson(profile.services_offered, []),
         certifications: parseJson(profile.certifications, []),
         photo: profile.photo_url || "",
+        parentVerificationCode: profile.parent_verification_code || "",
+        parentVerificationSentAt: profile.parent_verification_sent_at || "",
+        parentVerifiedAt: profile.parent_verified_at || "",
         ratings: [],
         nextTimes: []
       };
@@ -387,6 +418,11 @@ async function loadState(db) {
         id: user.id,
         name: user.name,
         email: user.email,
+        emailVerificationCode: user.email_verification_code || "",
+        emailVerificationSentAt: user.email_verification_sent_at || "",
+        emailVerifiedAt: user.email_verified_at || "",
+        passwordHash: user.password_hash || "",
+        passwordSalt: user.password_salt || "",
         linkedWorkerId: profile.linked_worker_id || ""
       };
     }
@@ -513,4 +549,3 @@ export async function onRequest(context) {
 
   return jsonResponse({ error: "Method not allowed." }, { status: 405 });
 }
-

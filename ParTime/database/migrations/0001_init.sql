@@ -9,6 +9,11 @@ CREATE TABLE IF NOT EXISTS users (
   language TEXT NOT NULL,
   location TEXT,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'blocked', 'disabled')),
+  password_hash TEXT NOT NULL DEFAULT '',
+  password_salt TEXT NOT NULL DEFAULT '',
+  email_verification_code TEXT NOT NULL DEFAULT '',
+  email_verification_sent_at TEXT,
+  email_verified_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -24,7 +29,10 @@ CREATE TABLE IF NOT EXISTS worker_profiles (
   parent_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   services_offered TEXT NOT NULL DEFAULT '[]',
   certifications TEXT NOT NULL DEFAULT '[]',
-  verified INTEGER NOT NULL DEFAULT 0
+  verified INTEGER NOT NULL DEFAULT 0,
+  parent_verification_code TEXT NOT NULL DEFAULT '',
+  parent_verification_sent_at TEXT,
+  parent_verified_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS client_profiles (
@@ -124,4 +132,3 @@ CREATE INDEX IF NOT EXISTS idx_job_applications_worker_id ON job_applications(wo
 CREATE INDEX IF NOT EXISTS idx_assignments_worker_id ON job_assignments(worker_id);
 CREATE INDEX IF NOT EXISTS idx_ratings_worker_id ON ratings(worker_id);
 CREATE INDEX IF NOT EXISTS idx_activity_log_user_id ON activity_log(user_id);
-

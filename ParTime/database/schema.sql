@@ -54,6 +54,11 @@ CREATE TABLE IF NOT EXISTS users (
   language text NOT NULL,
   location text,
   status user_status NOT NULL DEFAULT 'pending',
+  password_hash text NOT NULL DEFAULT '',
+  password_salt text NOT NULL DEFAULT '',
+  email_verification_code text NOT NULL DEFAULT '',
+  email_verification_sent_at timestamptz,
+  email_verified_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -69,7 +74,10 @@ CREATE TABLE IF NOT EXISTS worker_profiles (
   parent_user_id uuid REFERENCES users(id) ON DELETE SET NULL,
   services_offered jsonb NOT NULL DEFAULT '[]'::jsonb,
   certifications jsonb NOT NULL DEFAULT '[]'::jsonb,
-  verified boolean NOT NULL DEFAULT false
+  verified boolean NOT NULL DEFAULT false,
+  parent_verification_code text NOT NULL DEFAULT '',
+  parent_verification_sent_at timestamptz,
+  parent_verified_at timestamptz
 );
 
 CREATE TABLE IF NOT EXISTS client_profiles (
@@ -192,4 +200,3 @@ DROP TRIGGER IF EXISTS trg_worker_rating_summary_updated_at ON worker_rating_sum
 CREATE TRIGGER trg_worker_rating_summary_updated_at
 BEFORE UPDATE ON worker_rating_summary
 FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
-
