@@ -42,6 +42,7 @@ let helperSearch = "";
 let helperNotice = "";
 let authNotice = "";
 let profileModalWorkerId = "";
+let brandMenuOpen = false;
 let saveQueue = Promise.resolve();
 
 function hashPassword(password, salt = "") {
@@ -808,6 +809,7 @@ function createAutoParentAccount(worker) {
 function navigate(nextView, meta = {}) {
   view = nextView;
   routeMeta = meta;
+  brandMenuOpen = false;
   if (String(nextView).startsWith("onboard-")) {
     saveOnboardingDraft(nextView, meta.stage || "verify", meta.id || "");
   } else if (nextView === "login" || nextView === "create-account" || nextView === "landing") {
@@ -868,16 +870,25 @@ function renderProfileModal() {
 
 function renderHeader() {
   const session = readSession();
+  const profileTarget = session ? (session.role === "worker" ? "worker-dashboard" : session.role === "parent" ? "parent-monitor" : "client-dashboard") : "login";
   return `
     <header class="topbar">
-      <div class="brand" aria-label="ParTime home">
-        <span class="brand-mark">PT</span>
-        <span>
-          <strong>ParTime</strong>
-          <small>Student services marketplace</small>
-        </span>
+      <div class="brand-wrap">
+        <button class="brand" type="button" data-action="toggle-brand-menu" aria-expanded="${brandMenuOpen ? "true" : "false"}" aria-haspopup="menu" aria-label="ParTime menu">
+          <span class="brand-mark">PT</span>
+          <span>
+            <strong>ParTime</strong>
+            <small>Student services marketplace</small>
+          </span>
+        </button>
+        ${brandMenuOpen ? `
+          <div class="brand-menu" role="menu" aria-label="ParTime menu">
+            <button type="button" role="menuitem" data-action="brand-menu-nav" data-view="login">Login</button>
+            <button type="button" role="menuitem" data-action="brand-menu-nav" data-view="logout">Logout</button>
+            <button type="button" role="menuitem" data-action="brand-menu-nav" data-view="${profileTarget}">Profile</button>
+          </div>
+        ` : ""}
       </div>
-      ${session ? `<button class="nav-link logout-link" data-action="logout">Log out</button>` : ""}
     </header>
   `;
 }
@@ -992,6 +1003,9 @@ function renderCreateAccount() {
         <p class="eyebrow">New account</p>
         <h1>Create account</h1>
         <p class="muted">Choose the type of account you want to create.</p>
+        <div class="auth-back-row">
+          <button class="text-link" type="button" data-view="login">Back</button>
+        </div>
         <div class="account-choice-grid">
           <button class="account-card account-card--client account-card--large" data-view="onboard-client" data-stage="verify" type="button">
             <span class="account-card-label">Client account</span>
@@ -1005,10 +1019,6 @@ function renderCreateAccount() {
           </button>
         </div>
       </div>
-      <aside class="trust-panel">
-        <h2>Account setup</h2>
-        <p>You will go straight into the guided creation flow after choosing a type.</p>
-      </aside>
     </section>
   `;
 }
@@ -1022,7 +1032,6 @@ function renderClientVerificationScreen() {
   const verificationCode = client.emailVerificationCode || "";
   const verificationSent = Boolean(client.emailVerificationSentAt);
   const verified = Boolean(client.emailVerifiedAt);
-  const verificationHref = verificationCode ? verificationLink("client-email", client.id, verificationCode) : "";
 
   return `
     <section class="form-page">
@@ -1031,21 +1040,24 @@ function renderClientVerificationScreen() {
         <h1>Verify your email first</h1>
       </div>
       ${renderAuthNotice()}
+      <div class="auth-back-row">
+        <button class="text-link" type="button" data-view="create-account">Back</button>
+      </div>
       <div class="verification-layout verification-layout--vertical">
         <form class="profile-form" id="clientOnboardingForm">
           <div class="verification-card">
             <h3>Email verification</h3>
             <p>We will send an 8 digit code to this email. Enter it here to prove the address is real.</p>
-            <div class="verification-row">
-              <button class="secondary small" type="button" data-action="send-client-email-code">
-                ${verificationSent ? "Resend code" : "Send code"}
-              </button>
-              <span class="verification-email">${escapeHtml(client.email || "Email needed first")}</span>
-            </div>
             <label>
               <span>Email</span>
               <input type="email" name="email" value="${escapeHtml(client.email)}" maxlength="254" required />
             </label>
+            <div class="verification-row verification-row--stacked">
+              <span class="verification-email">${escapeHtml(client.email || "Email needed first")}</span>
+              <button class="secondary small" type="button" data-action="send-client-email-code">
+                ${verificationSent ? "Resend code" : "Send code"}
+              </button>
+            </div>
             <label>
               <span>Verification code</span>
               <input
@@ -1063,15 +1075,12 @@ function renderClientVerificationScreen() {
             </div>
             <p class="verification-note">For this prototype, the code is shown here after it is generated.</p>
             ${verificationSent ? `<div class="verification-code">${verificationCode}</div>` : ""}
-            ${verificationHref ? `<a class="verification-link" href="${escapeHtml(verificationHref)}">Open verification link</a>` : ""}
           </div>
           <div class="form-actions onboarding-actions">
             <button class="ghost small" type="button" data-action="verify-client-email-code" ${verificationSent ? "" : "disabled"}>
               Verify code
             </button>
-            <button class="primary" type="button" data-action="continue-client-profile" ${verified ? "" : "disabled"}>
-              Continue to client profile
-            </button>
+            ${verified ? `<button class="primary" type="button" data-action="continue-client-profile">Continue to client profile</button>` : ""}
           </div>
         </form>
         <aside class="trust-panel">
@@ -1092,6 +1101,9 @@ function renderClientDetailsForm() {
         <h1>Set up a client profile</h1>
       </div>
       ${renderAuthNotice()}
+      <div class="auth-back-row">
+        <button class="text-link" type="button" data-view="create-account">Back</button>
+      </div>
       <form class="profile-form" id="clientOnboardingForm">
         <div class="form-grid onboarding-grid">
           <label>
@@ -1132,7 +1144,7 @@ function renderClientDetailsForm() {
           <div class="check-grid">${serviceCheckboxes(client.typicalServices)}</div>
         </fieldset>
         <div class="form-actions">
-          <button class="primary" type="submit">Save client profile</button>
+          <button class="primary" type="submit">Log in</button>
         </div>
       </form>
     </section>
@@ -1150,8 +1162,6 @@ function renderWorkerVerificationScreen() {
   const parentVerificationCode = worker.parentVerificationCode || "";
   const parentVerificationSent = Boolean(worker.parentVerificationSentAt);
   const allVerified = Boolean(worker.emailVerifiedAt && worker.parentConfirmed);
-  const verificationHref = emailVerificationCode ? verificationLink("worker-email", worker.id, emailVerificationCode) : "";
-  const parentVerificationHref = parentVerificationCode ? verificationLink("worker-parent", worker.id, parentVerificationCode) : "";
 
   return `
     <section class="form-page">
@@ -1160,21 +1170,24 @@ function renderWorkerVerificationScreen() {
         <h1>Verify the emails first</h1>
       </div>
       ${renderAuthNotice()}
+      <div class="auth-back-row">
+        <button class="text-link" type="button" data-view="create-account">Back</button>
+      </div>
       <div class="verification-layout verification-layout--vertical">
         <form class="profile-form" id="workerOnboardingForm">
           <div class="verification-card">
             <h3>Student email verification</h3>
             <p>We will send an 8 digit code to this student email. Enter it here to prove the address is real.</p>
-            <div class="verification-row">
-              <button class="secondary small" type="button" data-action="send-worker-email-code">
-                ${emailVerificationSent ? "Resend code" : "Send code"}
-              </button>
-              <span class="verification-email">${escapeHtml(worker.email || "Email needed first")}</span>
-            </div>
             <label>
               <span>Email</span>
               <input type="email" name="email" value="${escapeHtml(worker.email)}" maxlength="254" required />
             </label>
+            <div class="verification-row verification-row--stacked">
+              <span class="verification-email">${escapeHtml(worker.email || "Email needed first")}</span>
+              <button class="secondary small" type="button" data-action="send-worker-email-code">
+                ${emailVerificationSent ? "Resend code" : "Send code"}
+              </button>
+            </div>
             <label>
               <span>Verification code</span>
               <input
@@ -1192,7 +1205,6 @@ function renderWorkerVerificationScreen() {
             </div>
             <p class="verification-note">For this prototype, the code is shown here after it is generated.</p>
             ${emailVerificationSent ? `<div class="verification-code">${emailVerificationCode}</div>` : ""}
-            ${verificationHref ? `<a class="verification-link" href="${escapeHtml(verificationHref)}">Open verification link</a>` : ""}
           </div>
 
           <div class="verification-card ${worker.emailVerifiedAt ? "" : "is-disabled"}">
@@ -1226,7 +1238,6 @@ function renderWorkerVerificationScreen() {
             </div>
             <p class="verification-note">For this prototype, the code is shown here after it is generated.</p>
             ${parentVerificationSent ? `<div class="verification-code">${parentVerificationCode}</div>` : ""}
-            ${parentVerificationHref ? `<a class="verification-link" href="${escapeHtml(parentVerificationHref)}">Open parent verification link</a>` : ""}
           </div>
 
           <div class="form-actions onboarding-actions">
@@ -1983,10 +1994,45 @@ function bindCommonEvents() {
     button.addEventListener("click", () => {
       clearSession();
       helperNotice = "";
-      routeMeta = { role: "client" };
       navigate("login", { role: "client" });
     });
   });
+
+  document.querySelectorAll("[data-action='toggle-brand-menu']").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      brandMenuOpen = !brandMenuOpen;
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-action='brand-menu-nav']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const next = button.dataset.view;
+      brandMenuOpen = false;
+      if (next === "logout") {
+        clearSession();
+        helperNotice = "";
+        navigate("login", { role: "client" });
+        return;
+      }
+      navigate(next, next === "client-dashboard" ? { role: "client" } : next === "worker-dashboard" ? { role: "worker" } : next === "parent-monitor" ? { role: "parent" } : {});
+    });
+  });
+
+  if (brandMenuOpen) {
+    document.addEventListener(
+      "click",
+      (event) => {
+        const brandWrap = document.querySelector(".brand-wrap");
+        if (brandWrap && !brandWrap.contains(event.target)) {
+          brandMenuOpen = false;
+          render();
+        }
+      },
+      { once: true }
+    );
+  }
 }
 
 function bindViewEvents() {
@@ -2176,9 +2222,11 @@ function bindClientOnboarding() {
     Object.assign(draft, passwordRecord(password));
     saveOnboardingDraft("onboard-client", "details", draft.id);
     saveState();
-    writeSession({ role: "client", id: draft.id });
+    clearSession();
     clearOnboardingDraft();
-    navigate("client-dashboard");
+    navigate("login", { role: "client" });
+    showAuthNotice("Client profile saved. Please log in with your email and password.");
+    render();
   });
 }
 
