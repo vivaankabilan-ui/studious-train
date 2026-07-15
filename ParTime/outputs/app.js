@@ -2778,7 +2778,6 @@ async function bootstrap() {
 
   state = remoteState || loadLocalState() || createDefaultState();
   handleVerificationLinkFromUrl();
-  const onboardingDraft = loadOnboardingDraft();
   const session = readSession();
   if (session) {
     const role = session.role || "client";
@@ -2795,21 +2794,6 @@ async function bootstrap() {
     } else {
       clearSession();
       view = "login";
-    }
-  } else if (view === "onboard-client" || view === "onboard-worker") {
-    if (view === "onboard-client") {
-      routeMeta = { stage: routeMeta.stage || "verify" };
-    } else {
-      routeMeta = { stage: routeMeta.stage || "verify" };
-    }
-  } else if (onboardingDraft && onboardingDraft.view && (onboardingDraft.view === "onboard-client" || onboardingDraft.view === "onboard-worker")) {
-    view = onboardingDraft.view;
-    routeMeta = { stage: onboardingDraft.stage || "verify" };
-    if (onboardingDraft.view === "onboard-client" && onboardingDraft.id && state.clients[onboardingDraft.id]) {
-      state.selectedClientId = onboardingDraft.id;
-    }
-    if (onboardingDraft.view === "onboard-worker" && onboardingDraft.id && state.workers[onboardingDraft.id]) {
-      state.selectedWorkerId = onboardingDraft.id;
     }
   } else {
     view = "landing";
