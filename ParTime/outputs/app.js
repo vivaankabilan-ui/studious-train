@@ -34,6 +34,12 @@ const SESSION_KEY = "partime-auth-session-v1";
 const ONBOARDING_KEY = "partime-onboarding-draft-v1";
 const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SEED_PASSWORD = "ParTime1234!";
+const DEFAULT_UI_PREFERENCES = {
+  theme: "emerald",
+  automaticFilters: true,
+  compactMode: false,
+  smartSuggestions: true
+};
 
 let view = "landing";
 let routeMeta = {};
@@ -43,6 +49,8 @@ let helperNotice = "";
 let authNotice = "";
 let profileModalWorkerId = "";
 let brandMenuOpen = false;
+let settingsModalOpen = false;
+let settingsTab = "account";
 let saveQueue = Promise.resolve();
 
 function hashPassword(password, salt = "") {
@@ -60,6 +68,30 @@ function passwordRecord(password, salt = randomSalt()) {
     passwordSalt: salt,
     passwordHash: hashPassword(password, salt)
   };
+}
+
+function normalizeUiPreferences(preferences = {}) {
+  return {
+    ...DEFAULT_UI_PREFERENCES,
+    ...preferences
+  };
+}
+
+function getSessionUser() {
+  const session = readSession();
+  if (!session) return null;
+  if (session.role === "worker") return state.workers[session.id] || null;
+  if (session.role === "parent") return state.parents[session.id] || null;
+  return state.clients[session.id] || null;
+}
+
+function activeUiPreferences() {
+  return normalizeUiPreferences(getSessionUser()?.uiPreferences);
+}
+
+function applyTheme(theme) {
+  if (!document?.documentElement) return;
+  document.documentElement.dataset.theme = theme || DEFAULT_UI_PREFERENCES.theme;
 }
 
 function randomSalt() {
@@ -197,6 +229,7 @@ function createDefaultState() {
         location: "Maplewood",
         typicalServices: ["Lawn Care", "Pet Sitting", "Tech Help"],
         preferredCurrency: "USD",
+        uiPreferences: normalizeUiPreferences(),
         ...passwordRecord(DEFAULT_SEED_PASSWORD, "client-c1")
       },
       c2: {
@@ -212,6 +245,7 @@ function createDefaultState() {
         location: "Cedar Grove",
         typicalServices: ["Pet Sitting", "Tutoring", "Errands"],
         preferredCurrency: "USD",
+        uiPreferences: normalizeUiPreferences(),
         ...passwordRecord(DEFAULT_SEED_PASSWORD, "client-c2")
       }
     },
@@ -235,6 +269,7 @@ function createDefaultState() {
         services: ["Lawn Care", "Pet Sitting", "Errands"],
         certifications: ["Pet first aid", "Honor roll", "Community service club"],
         photo: defaultPhotos.w1,
+        uiPreferences: normalizeUiPreferences(),
         ...passwordRecord(DEFAULT_SEED_PASSWORD, "worker-w1"),
         ratings: [
           { jobId: "r1", clientId: "c2", stars: 5, createdAt: "2026-05-10T12:00:00" },
@@ -265,6 +300,7 @@ function createDefaultState() {
         services: ["Tutoring", "Tech Help"],
         certifications: ["Math team", "Student tech desk"],
         photo: defaultPhotos.w2,
+        uiPreferences: normalizeUiPreferences(),
         ...passwordRecord(DEFAULT_SEED_PASSWORD, "worker-w2"),
         ratings: [
           { jobId: "e1", clientId: "c1", stars: 5, createdAt: "2026-04-11T12:00:00" },
@@ -294,6 +330,7 @@ function createDefaultState() {
         services: ["Pet Sitting", "Snow Help", "Lawn Care"],
         certifications: ["Shelter volunteer", "Babysitting basics"],
         photo: defaultPhotos.w3,
+        uiPreferences: normalizeUiPreferences(),
         ...passwordRecord(DEFAULT_SEED_PASSWORD, "worker-w3"),
         ratings: [
           { jobId: "n1", clientId: "c2", stars: 5, createdAt: "2026-05-16T12:00:00" },
@@ -320,6 +357,7 @@ function createDefaultState() {
         services: ["Errands", "Babysitting", "Tutoring"],
         certifications: ["CPR basics", "Peer mentor"],
         photo: defaultPhotos.w4,
+        uiPreferences: normalizeUiPreferences(),
         ...passwordRecord(DEFAULT_SEED_PASSWORD, "worker-w4"),
         ratings: [],
         nextTimes: []
@@ -821,12 +859,16 @@ function navigate(nextView, meta = {}) {
 
 function render() {
   const app = document.querySelector("#app");
+  const prefs = activeUiPreferences();
+  document.documentElement.dataset.theme = prefs.theme || DEFAULT_UI_PREFERENCES.theme;
+  document.documentElement.dataset.compact = prefs.compactMode ? "true" : "false";
   app.innerHTML = `
     ${renderHeader()}
     <main>
       ${renderView()}
     </main>
     ${renderProfileModal()}
+    ${renderSettingsModal()}
   `;
   bindCommonEvents();
   bindViewEvents();
@@ -868,9 +910,158 @@ function renderProfileModal() {
   `;
 }
 
+function renderSettingsModal() {
+  const session = readSession();
+  if (!session || !settingsModalOpen) return "";
+  const user = getSessionUser();
+  if (!user) return "";
+  const role = session.role || "client";
+  const uiPreferences = normalizeUiPreferences(user.uiPreferences);
+  const title = role === "worker" ? "Student settings" : role === "parent" ? "Parent settings" : "Client settings";
+  const services = role === "worker" ? user.services || [] : user.typicalServices || [];
+  const moreServiceValue = role === "worker" ? customServicesValue(user.services || []) : "";
+
+  return `
+    <div class="modal-backdrop" data-action="close-settings">
+      <section class="settings-modal" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+        <button class="modal-close" data-action="close-settings" aria-label="Close settings">x</button>
+        <div class="settings-head">
+          <div>
+            <p class="eyebrow">Settings</p>
+            <h2>${escapeHtml(title)}</h2>
+            <span class="muted">Update account details, passwords, and interface preferences.</span>
+          </div>
+          <div class="segmented settings-tabs">
+            <button type="button" class="${settingsTab === "account" ? "is-selected" : ""}" data-action="set-settings-tab" data-tab="account">Account</button>
+            <button type="button" class="${settingsTab === "interface" ? "is-selected" : ""}" data-action="set-settings-tab" data-tab="interface">Interface</button>
+          </div>
+        </div>
+
+        <form class="settings-form" id="settingsForm">
+          <input type="hidden" name="role" value="${escapeHtml(role)}" />
+          <div class="settings-body ${settingsTab === "interface" ? "is-hidden" : ""}">
+            <div class="form-grid onboarding-grid">
+            <label>
+              <span>Email</span>
+              <input type="email" value="${escapeHtml(user.email)}" readonly />
+            </label>
+            <label>
+              <span>Name</span>
+              <input type="text" name="name" value="${escapeHtml(user.name)}" maxlength="120" required />
+            </label>
+            <label>
+              <span>Phone number</span>
+              <input type="tel" name="phone" value="${escapeHtml(user.phone || "")}" maxlength="30" placeholder="Optional" />
+            </label>
+            <label>
+              <span>Address / location</span>
+              <input type="text" name="location" value="${escapeHtml(user.location || "")}" maxlength="120" required />
+            </label>
+            <label>
+              <span>What language do you speak?</span>
+              <select name="language" required>${languageOptions(user.language || "English")}</select>
+            </label>
+            <label>
+              <span>New password</span>
+              <input type="password" name="password" maxlength="128" placeholder="Leave blank to keep current password" />
+            </label>
+            <label>
+              <span>Confirm new password</span>
+              <input type="password" name="confirmPassword" maxlength="128" placeholder="Leave blank to keep current password" />
+            </label>
+            ${
+              role === "client"
+                ? `
+                    <label>
+                      <span>Preferred currency</span>
+                      <select name="preferredCurrency" required>${currencyOptions(user.preferredCurrency || "USD")}</select>
+                    </label>
+                  `
+                  : ""
+              }
+              ${
+                role === "worker"
+                  ? `
+                    <label>
+                      <span>Age</span>
+                      <input type="number" name="age" value="${escapeHtml(user.age)}" min="13" max="17" required />
+                    </label>
+                    <label>
+                      <span>School</span>
+                      <input type="text" name="school" value="${escapeHtml(user.school || "")}" maxlength="120" required />
+                    </label>
+                  `
+                  : ""
+              }
+            </div>
+            <fieldset>
+              <legend>${role === "worker" ? "Services offered" : "Jobs you are interested in"}</legend>
+              <div class="check-grid">${serviceCheckboxes(services)}</div>
+            </fieldset>
+            ${
+              role === "worker"
+                ? `
+                  <div class="more-service-card">
+                    <h3>More service</h3>
+                    <label>
+                      <span>Write another job or service you can offer</span>
+                      <textarea
+                        name="customService"
+                        rows="3"
+                        maxlength="180"
+                        placeholder="Write another service, such as car washing or party setup"
+                      >${escapeHtml(moreServiceValue)}</textarea>
+                    </label>
+                  </div>
+                  <label>
+                    <span>Short bio</span>
+                    <textarea name="bio" rows="4" maxlength="500" required>${escapeHtml(user.bio || "")}</textarea>
+                  </label>
+                  <label>
+                    <span>Certifications and skills</span>
+                    <input type="text" name="certifications" value="${escapeHtml((user.certifications || []).join(", "))}" maxlength="300" required />
+                  </label>
+                `
+                : ""
+            }
+          </div>
+
+          <div class="settings-body ${settingsTab === "account" ? "is-hidden" : ""}">
+            <div class="ui-settings-grid">
+              <label class="themed-select-label">
+                <span>Colour theme</span>
+                <select name="theme">
+                  <option value="emerald" ${uiPreferences.theme === "emerald" ? "selected" : ""}>Emerald</option>
+                  <option value="ocean" ${uiPreferences.theme === "ocean" ? "selected" : ""}>Ocean</option>
+                  <option value="midnight" ${uiPreferences.theme === "midnight" ? "selected" : ""}>Midnight</option>
+                </select>
+              </label>
+              <label class="toggle-chip">
+                <input type="checkbox" name="automaticFilters" ${uiPreferences.automaticFilters ? "checked" : ""} />
+                <span>Automatic filters</span>
+              </label>
+              <label class="toggle-chip">
+                <input type="checkbox" name="compactMode" ${uiPreferences.compactMode ? "checked" : ""} />
+                <span>Compact layout</span>
+              </label>
+              <label class="toggle-chip">
+                <input type="checkbox" name="smartSuggestions" ${uiPreferences.smartSuggestions ? "checked" : ""} />
+                <span>Smart suggestions</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-actions settings-actions">
+            <button class="primary" type="submit">Save changes</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
 function renderHeader() {
   const session = readSession();
-  const profileTarget = session ? (session.role === "worker" ? "worker-dashboard" : session.role === "parent" ? "parent-monitor" : "client-dashboard") : "login";
   return `
     <header class="topbar">
       <div class="brand-wrap">
@@ -883,9 +1074,14 @@ function renderHeader() {
         </button>
         ${brandMenuOpen ? `
           <div class="brand-menu" role="menu" aria-label="ParTime menu">
-            <button type="button" role="menuitem" data-action="brand-menu-nav" data-view="login">Login</button>
-            <button type="button" role="menuitem" data-action="brand-menu-nav" data-view="logout">Logout</button>
-            <button type="button" role="menuitem" data-action="brand-menu-nav" data-view="${profileTarget}">Profile</button>
+            ${
+              session
+                ? `
+                  <button type="button" role="menuitem" data-action="open-settings">Profile</button>
+                  <button type="button" role="menuitem" data-action="logout">Logout</button>
+                `
+                : `<button type="button" role="menuitem" data-action="brand-menu-nav" data-view="login">Log in</button>`
+            }
           </div>
         ` : ""}
       </div>
@@ -1035,14 +1231,14 @@ function renderClientVerificationScreen() {
 
   return `
     <section class="form-page">
-      <div class="section-heading">
-        <p class="eyebrow">Client sign up</p>
-        <h1>Verify your email first</h1>
+      <div class="page-heading-row">
+        <div class="section-heading">
+          <p class="eyebrow">Client sign up</p>
+          <h1>Verify your email first</h1>
+        </div>
+        <button class="back-button back-button-top-right" type="button" data-view="create-account">Back</button>
       </div>
       ${renderAuthNotice()}
-      <div class="auth-back-row">
-        <button class="text-link" type="button" data-view="create-account">Back</button>
-      </div>
       <div class="verification-layout verification-layout--vertical">
         <form class="profile-form" id="clientOnboardingForm">
           <div class="verification-card">
@@ -1063,24 +1259,24 @@ function renderClientVerificationScreen() {
               <input
                 type="text"
                 name="emailVerificationCode"
+                data-action="client-email-code-input"
                 inputmode="numeric"
                 maxlength="8"
-                value="${escapeHtml(verificationCode)}"
                 placeholder="Enter the 8 digit code"
-                ${verificationSent ? "required" : ""}
+                autocomplete="one-time-code"
+                ${verificationSent ? "" : "disabled"}
               />
             </label>
-            <div class="verification-status ${verified ? "is-confirmed" : ""}">
+            <div class="verification-status ${verified ? "is-confirmed" : ""}" data-verification-status="client">
               ${verified ? "Email verified. You can continue to the profile." : verificationSent ? `Code sent to ${escapeHtml(client.email)}.` : "No code sent yet."}
             </div>
             <p class="verification-note">For this prototype, the code is shown here after it is generated.</p>
             ${verificationSent ? `<div class="verification-code">${verificationCode}</div>` : ""}
           </div>
           <div class="form-actions onboarding-actions">
-            <button class="ghost small" type="button" data-action="verify-client-email-code" ${verificationSent ? "" : "disabled"}>
-              Verify code
+            <button class="primary continue-fade ${verified ? "is-visible" : ""}" type="button" data-action="continue-client-profile" ${verified ? "" : "disabled"}>
+              Continue to client profile
             </button>
-            ${verified ? `<button class="primary" type="button" data-action="continue-client-profile">Continue to client profile</button>` : ""}
           </div>
         </form>
         <aside class="trust-panel">
@@ -1096,14 +1292,14 @@ function renderClientDetailsForm() {
   const client = getClient();
   return `
     <section class="form-page">
-      <div class="section-heading">
-        <p class="eyebrow">Client sign up</p>
-        <h1>Set up a client profile</h1>
+      <div class="page-heading-row">
+        <div class="section-heading">
+          <p class="eyebrow">Client sign up</p>
+          <h1>Set up a client profile</h1>
+        </div>
+        <button class="back-button back-button-top-right" type="button" data-view="create-account">Back</button>
       </div>
       ${renderAuthNotice()}
-      <div class="auth-back-row">
-        <button class="text-link" type="button" data-view="create-account">Back</button>
-      </div>
       <form class="profile-form" id="clientOnboardingForm">
         <div class="form-grid onboarding-grid">
           <label>
@@ -1165,14 +1361,14 @@ function renderWorkerVerificationScreen() {
 
   return `
     <section class="form-page">
-      <div class="section-heading">
-        <p class="eyebrow">Student sign up</p>
-        <h1>Verify the emails first</h1>
+      <div class="page-heading-row">
+        <div class="section-heading">
+          <p class="eyebrow">Student sign up</p>
+          <h1>Verify the emails first</h1>
+        </div>
+        <button class="back-button back-button-top-right" type="button" data-view="create-account">Back</button>
       </div>
       ${renderAuthNotice()}
-      <div class="auth-back-row">
-        <button class="text-link" type="button" data-view="create-account">Back</button>
-      </div>
       <div class="verification-layout verification-layout--vertical">
         <form class="profile-form" id="workerOnboardingForm">
           <div class="verification-card">
@@ -1269,9 +1465,12 @@ function renderWorkerDetailsForm() {
   const worker = getWorker();
   return `
     <section class="form-page">
-      <div class="section-heading">
-        <p class="eyebrow">Student sign up</p>
-        <h1>Create a student profile</h1>
+      <div class="page-heading-row">
+        <div class="section-heading">
+          <p class="eyebrow">Student sign up</p>
+          <h1>Create a student profile</h1>
+        </div>
+        <button class="back-button back-button-top-right" type="button" data-view="create-account">Back</button>
       </div>
       ${renderAuthNotice()}
       <form class="profile-form" id="workerOnboardingForm">
@@ -1378,7 +1577,7 @@ function renderClientDashboard() {
           <h1>Welcome, ${escapeHtml(client.name)}</h1>
           <p>${escapeHtml(client.location)} jobs and matched students. Language: ${escapeHtml(client.language)}.</p>
         </div>
-        <button class="secondary" data-view="onboard-client">Edit profile</button>
+        <button class="secondary" type="button" data-action="open-settings">Settings</button>
       </div>
 
       <div class="metric-grid">
@@ -1654,7 +1853,7 @@ function renderWorkerDashboard() {
             <span class="profile-rating">${escapeHtml(ratingSummary(worker))}</span>
           </div>
         </div>
-        <button class="secondary" data-view="onboard-worker">Edit profile</button>
+        <button class="secondary" type="button" data-action="open-settings">Settings</button>
       </div>
 
       <div class="metric-grid">
@@ -1982,6 +2181,32 @@ function bindCommonEvents() {
     });
   });
 
+  document.querySelectorAll("[data-action='open-settings']").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      brandMenuOpen = false;
+      settingsModalOpen = true;
+      settingsTab = "account";
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-action='close-settings']").forEach((element) => {
+    element.addEventListener("click", (event) => {
+      if (event.target !== element && !element.classList.contains("modal-close")) return;
+      settingsModalOpen = false;
+      settingsTab = "account";
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-action='set-settings-tab']").forEach((button) => {
+    button.addEventListener("click", () => {
+      settingsTab = button.dataset.tab === "interface" ? "interface" : "account";
+      render();
+    });
+  });
+
   document.querySelectorAll("[data-action='close-profile']").forEach((element) => {
     element.addEventListener("click", (event) => {
       if (event.target !== element && !element.classList.contains("modal-close")) return;
@@ -1994,6 +2219,8 @@ function bindCommonEvents() {
     button.addEventListener("click", () => {
       clearSession();
       helperNotice = "";
+      settingsModalOpen = false;
+      settingsTab = "account";
       navigate("login", { role: "client" });
     });
   });
@@ -2013,6 +2240,8 @@ function bindCommonEvents() {
       if (next === "logout") {
         clearSession();
         helperNotice = "";
+        settingsModalOpen = false;
+        settingsTab = "account";
         navigate("login", { role: "client" });
         return;
       }
@@ -2035,12 +2264,86 @@ function bindCommonEvents() {
   }
 }
 
+function bindSettingsModal() {
+  const form = document.querySelector("#settingsForm");
+  if (!form) return;
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const session = readSession();
+    const user = getSessionUser();
+    if (!session || !user) return;
+
+    const role = session.role || user.role || "client";
+    const formData = new FormData(form);
+    const password = String(formData.get("password") || "").trim();
+    const confirmPassword = String(formData.get("confirmPassword") || "").trim();
+
+    if (password || confirmPassword) {
+      if (password.length < 8) {
+        showFormError(form, "Please make your new password at least 8 characters long.");
+        return;
+      }
+      if (password !== confirmPassword) {
+        showFormError(form, "Your password entries do not match.");
+        return;
+      }
+      Object.assign(user, passwordRecord(password));
+    }
+
+    user.name = String(formData.get("name") || "").trim();
+    user.phone = String(formData.get("phone") || "").trim();
+    user.location = String(formData.get("location") || "").trim();
+    user.language = String(formData.get("language") || "English");
+    user.uiPreferences = normalizeUiPreferences({
+      ...user.uiPreferences,
+      theme: String(formData.get("theme") || DEFAULT_UI_PREFERENCES.theme),
+      automaticFilters: formData.get("automaticFilters") === "on",
+      compactMode: formData.get("compactMode") === "on",
+      smartSuggestions: formData.get("smartSuggestions") === "on"
+    });
+
+    if (role === "client") {
+      user.preferredCurrency = String(formData.get("preferredCurrency") || "USD");
+      user.typicalServices = formData.getAll("services");
+    } else if (role === "worker") {
+      const age = Number(formData.get("age"));
+      if (!Number.isFinite(age) || age < 13 || age >= 18) {
+        showFormError(form, "Student accounts must stay under 18.");
+        return;
+      }
+      user.age = age;
+      user.school = String(formData.get("school") || "").trim();
+      user.bio = String(formData.get("bio") || "").trim();
+      user.services = formData
+        .getAll("services")
+        .concat(
+          String(formData.get("customService") || "")
+            .split(/[,\n]/)
+            .map((item) => item.trim())
+            .filter(Boolean)
+        )
+        .filter((item, index, list) => list.indexOf(item) === index);
+      user.certifications = String(formData.get("certifications") || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+
+    settingsModalOpen = false;
+    settingsTab = "account";
+    await saveState();
+    render();
+  });
+}
+
 function bindViewEvents() {
   if (view === "login") bindLogin();
   if (view === "onboard-client") bindClientOnboarding();
   if (view === "onboard-worker") bindWorkerOnboarding();
   if (view === "client-dashboard") bindClientDashboard();
   if (view === "worker-dashboard") bindWorkerDashboard();
+  bindSettingsModal();
 }
 
 function bindLogin() {
@@ -2143,28 +2446,45 @@ function bindClientOnboarding() {
     });
   }
 
-  const verifyCodeButton = document.querySelector("[data-action='verify-client-email-code']");
-  if (verifyCodeButton) {
-    verifyCodeButton.addEventListener("click", () => {
-      const formData = new FormData(form);
-      const draft = syncDraftClient(formData);
-      const code = String(formData.get("emailVerificationCode") || "").trim();
+  const verificationStatus = document.querySelector("[data-verification-status='client']");
+  const codeInput = document.querySelector("[data-action='client-email-code-input']");
+  if (codeInput && verificationStatus) {
+    const evaluateCode = () => {
+      const draft = syncDraftClient(new FormData(form));
+      const code = String(codeInput.value || "").trim();
       if (!draft.emailVerificationCode) {
-        showFormError(form, "Send the email code first.");
+        verificationStatus.textContent = draft.emailVerificationSentAt ? "Waiting for a code." : "No code sent yet.";
+        verificationStatus.classList.remove("is-confirmed", "is-error");
         return;
       }
-      const message = verificationStateMessage(draft, code, "Email");
-      if (message) {
-        showFormError(form, message);
+      if (code.length < 8) {
+        verificationStatus.textContent = "Enter the 8 digit code.";
+        verificationStatus.classList.remove("is-confirmed", "is-error");
+        return;
+      }
+      if (normalizeEmail(code) !== normalizeEmail(draft.emailVerificationCode)) {
+        verificationStatus.textContent = "Incorrect code";
+        verificationStatus.classList.remove("is-confirmed");
+        verificationStatus.classList.add("is-error");
         return;
       }
       draft.emailVerifiedAt = new Date().toISOString();
       draft.emailVerificationCode = "";
       draft.emailVerificationSentAt = "";
+      verificationStatus.textContent = "Email verified. You can continue to the profile.";
+      verificationStatus.classList.remove("is-error");
+      verificationStatus.classList.add("is-confirmed");
       saveOnboardingDraft("onboard-client", stage, draft.id);
       saveState();
+      showAuthNotice("Email verified. You can continue to the client profile.");
       render();
-    });
+    };
+
+    codeInput.addEventListener("input", evaluateCode);
+    if (client.emailVerificationCode && client.emailVerifiedAt) {
+      verificationStatus.textContent = "Email verified. You can continue to the profile.";
+      verificationStatus.classList.add("is-confirmed");
+    }
   }
 
   const continueButton = document.querySelector("[data-action='continue-client-profile']");

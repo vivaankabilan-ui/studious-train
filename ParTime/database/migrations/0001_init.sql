@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS worker_profiles (
   parent_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   services_offered TEXT NOT NULL DEFAULT '[]',
   certifications TEXT NOT NULL DEFAULT '[]',
+  ui_preferences TEXT NOT NULL DEFAULT '{}',
   verified INTEGER NOT NULL DEFAULT 0,
   parent_verification_code TEXT NOT NULL DEFAULT '',
   parent_verification_sent_at TEXT,
@@ -39,7 +40,8 @@ CREATE TABLE IF NOT EXISTS client_profiles (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   preferred_currency TEXT NOT NULL DEFAULT 'USD',
   services_looking_for TEXT NOT NULL DEFAULT '[]',
-  default_location TEXT
+  default_location TEXT,
+  ui_preferences TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS parent_profiles (

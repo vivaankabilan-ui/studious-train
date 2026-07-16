@@ -22,6 +22,21 @@ function parseJson(value, fallback) {
   }
 }
 
+async function ensureOptionalColumns(db) {
+  const tables = [
+    { table: "client_profiles", column: "ui_preferences" },
+    { table: "worker_profiles", column: "ui_preferences" }
+  ];
+
+  for (const { table, column } of tables) {
+    const info = await db.prepare(`PRAGMA table_info(${table})`).all();
+    const hasColumn = (info.results || []).some((row) => row.name === column);
+    if (!hasColumn) {
+      await db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT NOT NULL DEFAULT '{}'`);
+    }
+  }
+}
+
 function formatRoleStatus(role, active = true) {
   if (role === "worker") return active ? "active" : "pending";
   return active ? "active" : "pending";
@@ -110,13 +125,14 @@ async function saveState(db, state) {
     ).run();
 
     await db.prepare(
-      `INSERT INTO client_profiles (user_id, preferred_currency, services_looking_for, default_location)
-       VALUES (?, ?, ?, ?)`
+      `INSERT INTO client_profiles (user_id, preferred_currency, services_looking_for, default_location, ui_preferences)
+       VALUES (?, ?, ?, ?, ?)`
     ).bind(
       client.id,
       client.preferredCurrency || "USD",
       JSON.stringify(client.typicalServices || []),
-      client.location || ""
+      client.location || "",
+      JSON.stringify(client.uiPreferences || {})
     ).run();
   }
 
@@ -141,9 +157,9 @@ async function saveState(db, state) {
 
     const parent = parents.find((item) => item.email === worker.parentEmail || item.linkedWorkerId === worker.id);
     await db.prepare(
-      `INSERT INTO worker_profiles (
-        user_id, photo_url, bio, age, school, parent_email, parent_confirmed, parent_user_id, services_offered, certifications, verified, parent_verification_code, parent_verification_sent_at, parent_verified_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO worker_profiles (
+        user_id, photo_url, bio, age, school, parent_email, parent_confirmed, parent_user_id, services_offered, certifications, verified, parent_verification_code, parent_verification_sent_at, parent_verified_at, ui_preferences
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       worker.id,
       worker.photo || "",
@@ -158,7 +174,8 @@ async function saveState(db, state) {
       toSqlBool(worker.parentConfirmed),
       worker.parentVerificationCode || "",
       worker.parentVerificationSentAt || "",
-      worker.parentVerifiedAt || ""
+      worker.parentVerifiedAt || "",
+      JSON.stringify(worker.uiPreferences || {})
     ).run();
   }
 
@@ -380,6 +397,8 @@ async function loadState(db) {
         passwordSalt: user.password_salt || "",
         typicalServices: parseJson(profile.services_looking_for, []),
         preferredCurrency: profile.preferred_currency || "USD"
+        ,
+        uiPreferences: parseJson(profile.ui_preferences, {})
       };
     }
 
@@ -409,6 +428,7 @@ async function loadState(db) {
         parentVerificationCode: profile.parent_verification_code || "",
         parentVerificationSentAt: profile.parent_verification_sent_at || "",
         parentVerifiedAt: profile.parent_verified_at || "",
+        uiPreferences: parseJson(profile.ui_preferences, {}),
         ratings: [],
         nextTimes: []
       };
@@ -529,6 +549,8 @@ export async function onRequest(context) {
   if (!env.DB) {
     return jsonResponse({ error: "D1 database binding missing." }, { status: 500 });
   }
+
+  await ensureOptionalColumns(env.DB);
 
   if (request.method === "GET") {
     const state = await loadState(env.DB);

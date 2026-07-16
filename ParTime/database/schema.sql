@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS worker_profiles (
   parent_user_id uuid REFERENCES users(id) ON DELETE SET NULL,
   services_offered jsonb NOT NULL DEFAULT '[]'::jsonb,
   certifications jsonb NOT NULL DEFAULT '[]'::jsonb,
+  ui_preferences jsonb NOT NULL DEFAULT '{}'::jsonb,
   verified boolean NOT NULL DEFAULT false,
   parent_verification_code text NOT NULL DEFAULT '',
   parent_verification_sent_at timestamptz,
@@ -84,7 +85,8 @@ CREATE TABLE IF NOT EXISTS client_profiles (
   user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   preferred_currency text NOT NULL DEFAULT 'USD',
   services_looking_for jsonb NOT NULL DEFAULT '[]'::jsonb,
-  default_location text
+  default_location text,
+  ui_preferences jsonb NOT NULL DEFAULT '{}'::jsonb
 );
 
 CREATE TABLE IF NOT EXISTS parent_profiles (
