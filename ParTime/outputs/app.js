@@ -50,7 +50,6 @@ let authNotice = "";
 let profileModalWorkerId = "";
 let brandMenuOpen = false;
 let settingsModalOpen = false;
-let settingsTab = "account";
 let saveQueue = Promise.resolve();
 
 function hashPassword(password, salt = "") {
@@ -87,6 +86,23 @@ function getSessionUser() {
 
 function activeUiPreferences() {
   return normalizeUiPreferences(getSessionUser()?.uiPreferences);
+}
+
+function hasEmailConflict(email, ignoreId = "", roles = null) {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return false;
+  const matchesRole = (role) => !Array.isArray(roles) || roles.includes(role);
+  return Boolean(
+    Object.values(state.clients).find(
+      (item) => item.id !== ignoreId && matchesRole("client") && normalizeEmail(item.email) === normalized
+    ) ||
+      Object.values(state.workers).find(
+        (item) => item.id !== ignoreId && matchesRole("worker") && normalizeEmail(item.email) === normalized
+      ) ||
+      Object.values(state.parents).find(
+        (item) => item.id !== ignoreId && matchesRole("parent") && normalizeEmail(item.email) === normalized
+      )
+  );
 }
 
 function applyTheme(theme) {
@@ -553,7 +569,32 @@ async function loadState() {
   return createDefaultState();
 }
 
+function findDuplicateEmailInState(snapshot) {
+  const seen = new Map();
+  const records = [
+    ...(Object.values(snapshot.clients || {})),
+    ...(Object.values(snapshot.workers || {})),
+    ...(Object.values(snapshot.parents || {}))
+  ];
+
+  for (const record of records) {
+    const email = normalizeEmail(record.email);
+    if (!email) continue;
+    if (seen.has(email) && seen.get(email) !== record.id) {
+      return email;
+    }
+    seen.set(email, record.id);
+  }
+  return "";
+}
+
 async function saveState() {
+  const duplicateEmail = findDuplicateEmailInState(state);
+  if (duplicateEmail) {
+    showAuthNotice("That email is already in use.");
+    return Promise.resolve();
+  }
+
   const snapshot = JSON.stringify(state);
   try {
     localStorage.setItem(STORAGE_KEY, snapshot);
@@ -823,6 +864,7 @@ function createAutoParentAccount(worker) {
   const email = String(worker.parentEmail || "").toLowerCase().trim();
   if (!email) return null;
   const existing = Object.values(state.parents).find((parent) => parent.email.toLowerCase() === email);
+  if (!existing && hasEmailConflict(email, "", ["client", "worker"])) return null;
   const parent = existing || {
     id: autoParentIdForEmail(email),
     role: "parent",
@@ -929,126 +971,129 @@ function renderSettingsModal() {
           <div>
             <p class="eyebrow">Settings</p>
             <h2>${escapeHtml(title)}</h2>
-            <span class="muted">Update account details, passwords, and interface preferences.</span>
-          </div>
-          <div class="segmented settings-tabs">
-            <button type="button" class="${settingsTab === "account" ? "is-selected" : ""}" data-action="set-settings-tab" data-tab="account">Account</button>
-            <button type="button" class="${settingsTab === "interface" ? "is-selected" : ""}" data-action="set-settings-tab" data-tab="interface">Interface</button>
+            <span class="muted">Update account details, passwords, and UI preferences.</span>
           </div>
         </div>
 
         <form class="settings-form" id="settingsForm">
           <input type="hidden" name="role" value="${escapeHtml(role)}" />
-          <div class="settings-body ${settingsTab === "interface" ? "is-hidden" : ""}">
-            <div class="form-grid onboarding-grid">
-            <label>
-              <span>Email</span>
-              <input type="email" value="${escapeHtml(user.email)}" readonly />
-            </label>
-            <label>
-              <span>Name</span>
-              <input type="text" name="name" value="${escapeHtml(user.name)}" maxlength="120" required />
-            </label>
-            <label>
-              <span>Phone number</span>
-              <input type="tel" name="phone" value="${escapeHtml(user.phone || "")}" maxlength="30" placeholder="Optional" />
-            </label>
-            <label>
-              <span>Address / location</span>
-              <input type="text" name="location" value="${escapeHtml(user.location || "")}" maxlength="120" required />
-            </label>
-            <label>
-              <span>What language do you speak?</span>
-              <select name="language" required>${languageOptions(user.language || "English")}</select>
-            </label>
-            <label>
-              <span>New password</span>
-              <input type="password" name="password" maxlength="128" placeholder="Leave blank to keep current password" />
-            </label>
-            <label>
-              <span>Confirm new password</span>
-              <input type="password" name="confirmPassword" maxlength="128" placeholder="Leave blank to keep current password" />
-            </label>
-            ${
-              role === "client"
-                ? `
-                    <label>
-                      <span>Preferred currency</span>
-                      <select name="preferredCurrency" required>${currencyOptions(user.preferredCurrency || "USD")}</select>
-                    </label>
-                  `
-                  : ""
-              }
+          <div class="settings-body">
+            <section class="settings-section">
+              <h3>Account</h3>
+              <div class="form-grid onboarding-grid">
+                <label>
+                  <span>Email</span>
+                  <input type="email" value="${escapeHtml(user.email)}" readonly />
+                </label>
+                <label>
+                  <span>Name</span>
+                  <input type="text" name="name" value="${escapeHtml(user.name)}" maxlength="120" required />
+                </label>
+                <label>
+                  <span>Phone number</span>
+                  <input type="tel" name="phone" value="${escapeHtml(user.phone || "")}" maxlength="30" placeholder="Optional" />
+                </label>
+                <label>
+                  <span>Address / location</span>
+                  <input type="text" name="location" value="${escapeHtml(user.location || "")}" maxlength="120" required />
+                </label>
+                <label>
+                  <span>What language do you speak?</span>
+                  <select name="language" required>${languageOptions(user.language || "English")}</select>
+                </label>
+                <label>
+                  <span>New password</span>
+                  <input type="password" name="password" maxlength="128" placeholder="Leave blank to keep current password" />
+                </label>
+                <label>
+                  <span>Confirm new password</span>
+                  <input type="password" name="confirmPassword" maxlength="128" placeholder="Leave blank to keep current password" />
+                </label>
+                ${
+                  role === "client"
+                    ? `
+                      <label>
+                        <span>Preferred currency</span>
+                        <select name="preferredCurrency" required>${currencyOptions(user.preferredCurrency || "USD")}</select>
+                      </label>
+                    `
+                    : ""
+                }
+                ${
+                  role === "worker"
+                    ? `
+                      <label>
+                        <span>Age</span>
+                        <input type="number" name="age" value="${escapeHtml(user.age)}" min="13" max="17" required />
+                      </label>
+                      <label>
+                        <span>School</span>
+                        <input type="text" name="school" value="${escapeHtml(user.school || "")}" maxlength="120" required />
+                      </label>
+                    `
+                    : ""
+                }
+              </div>
+              <fieldset>
+                <legend>${role === "worker" ? "Services offered" : "Jobs you are interested in"}</legend>
+                <div class="check-grid">${serviceCheckboxes(services)}</div>
+              </fieldset>
               ${
                 role === "worker"
                   ? `
+                    <div class="more-service-card">
+                      <h3>More service</h3>
+                      <label>
+                        <span>Write another job or service you can offer</span>
+                        <textarea
+                          name="customService"
+                          rows="3"
+                          maxlength="180"
+                          placeholder="Write another service, such as car washing or party setup"
+                        >${escapeHtml(moreServiceValue)}</textarea>
+                      </label>
+                    </div>
                     <label>
-                      <span>Age</span>
-                      <input type="number" name="age" value="${escapeHtml(user.age)}" min="13" max="17" required />
+                      <span>Short bio</span>
+                      <textarea name="bio" rows="4" maxlength="500" required>${escapeHtml(user.bio || "")}</textarea>
                     </label>
                     <label>
-                      <span>School</span>
-                      <input type="text" name="school" value="${escapeHtml(user.school || "")}" maxlength="120" required />
+                      <span>Certifications and skills</span>
+                      <input type="text" name="certifications" value="${escapeHtml((user.certifications || []).join(", "))}" maxlength="300" required />
                     </label>
                   `
                   : ""
               }
-            </div>
-            <fieldset>
-              <legend>${role === "worker" ? "Services offered" : "Jobs you are interested in"}</legend>
-              <div class="check-grid">${serviceCheckboxes(services)}</div>
-            </fieldset>
-            ${
-              role === "worker"
-                ? `
-                  <div class="more-service-card">
-                    <h3>More service</h3>
-                    <label>
-                      <span>Write another job or service you can offer</span>
-                      <textarea
-                        name="customService"
-                        rows="3"
-                        maxlength="180"
-                        placeholder="Write another service, such as car washing or party setup"
-                      >${escapeHtml(moreServiceValue)}</textarea>
-                    </label>
-                  </div>
-                  <label>
-                    <span>Short bio</span>
-                    <textarea name="bio" rows="4" maxlength="500" required>${escapeHtml(user.bio || "")}</textarea>
-                  </label>
-                  <label>
-                    <span>Certifications and skills</span>
-                    <input type="text" name="certifications" value="${escapeHtml((user.certifications || []).join(", "))}" maxlength="300" required />
-                  </label>
-                `
-                : ""
-            }
-          </div>
-
-          <div class="settings-body ${settingsTab === "account" ? "is-hidden" : ""}">
-            <div class="ui-settings-grid">
-              <label class="themed-select-label">
-                <span>Colour theme</span>
-                <select name="theme">
-                  <option value="emerald" ${uiPreferences.theme === "emerald" ? "selected" : ""}>Emerald</option>
-                  <option value="ocean" ${uiPreferences.theme === "ocean" ? "selected" : ""}>Ocean</option>
-                  <option value="midnight" ${uiPreferences.theme === "midnight" ? "selected" : ""}>Midnight</option>
-                </select>
-              </label>
-              <label class="toggle-chip">
-                <input type="checkbox" name="automaticFilters" ${uiPreferences.automaticFilters ? "checked" : ""} />
-                <span>Automatic filters</span>
-              </label>
-              <label class="toggle-chip">
-                <input type="checkbox" name="compactMode" ${uiPreferences.compactMode ? "checked" : ""} />
-                <span>Compact layout</span>
-              </label>
-              <label class="toggle-chip">
-                <input type="checkbox" name="smartSuggestions" ${uiPreferences.smartSuggestions ? "checked" : ""} />
-                <span>Smart suggestions</span>
-              </label>
-            </div>
+            </section>
+            <section class="settings-section">
+              <h3>Interface</h3>
+              <div class="ui-settings-grid">
+                <label class="themed-select-label">
+                  <span>Colour theme</span>
+                  <select name="theme">
+                    <option value="emerald" ${uiPreferences.theme === "emerald" ? "selected" : ""}>Emerald</option>
+                    <option value="ocean" ${uiPreferences.theme === "ocean" ? "selected" : ""}>Ocean</option>
+                    <option value="sky" ${uiPreferences.theme === "sky" ? "selected" : ""}>Sky</option>
+                    <option value="forest" ${uiPreferences.theme === "forest" ? "selected" : ""}>Forest</option>
+                    <option value="sunset" ${uiPreferences.theme === "sunset" ? "selected" : ""}>Sunset</option>
+                    <option value="berry" ${uiPreferences.theme === "berry" ? "selected" : ""}>Berry</option>
+                    <option value="midnight" ${uiPreferences.theme === "midnight" ? "selected" : ""}>Midnight</option>
+                  </select>
+                </label>
+                <label class="toggle-chip">
+                  <input type="checkbox" name="automaticFilters" ${uiPreferences.automaticFilters ? "checked" : ""} />
+                  <span>Automatic filters</span>
+                </label>
+                <label class="toggle-chip">
+                  <input type="checkbox" name="compactMode" ${uiPreferences.compactMode ? "checked" : ""} />
+                  <span>Compact layout</span>
+                </label>
+                <label class="toggle-chip">
+                  <input type="checkbox" name="smartSuggestions" ${uiPreferences.smartSuggestions ? "checked" : ""} />
+                  <span>Smart suggestions</span>
+                </label>
+              </div>
+            </section>
           </div>
 
           <div class="form-actions settings-actions">
@@ -1077,7 +1122,7 @@ function renderHeader() {
             ${
               session
                 ? `
-                  <button type="button" role="menuitem" data-action="open-settings">Profile</button>
+                  <button type="button" role="menuitem" data-action="open-settings">Settings</button>
                   <button type="button" role="menuitem" data-action="logout">Logout</button>
                 `
                 : `<button type="button" role="menuitem" data-action="brand-menu-nav" data-view="login">Log in</button>`
@@ -1577,7 +1622,6 @@ function renderClientDashboard() {
           <h1>Welcome, ${escapeHtml(client.name)}</h1>
           <p>${escapeHtml(client.location)} jobs and matched students. Language: ${escapeHtml(client.language)}.</p>
         </div>
-        <button class="secondary" type="button" data-action="open-settings">Settings</button>
       </div>
 
       <div class="metric-grid">
@@ -1853,7 +1897,6 @@ function renderWorkerDashboard() {
             <span class="profile-rating">${escapeHtml(ratingSummary(worker))}</span>
           </div>
         </div>
-        <button class="secondary" type="button" data-action="open-settings">Settings</button>
       </div>
 
       <div class="metric-grid">
@@ -2186,7 +2229,6 @@ function bindCommonEvents() {
       event.stopPropagation();
       brandMenuOpen = false;
       settingsModalOpen = true;
-      settingsTab = "account";
       render();
     });
   });
@@ -2195,14 +2237,6 @@ function bindCommonEvents() {
     element.addEventListener("click", (event) => {
       if (event.target !== element && !element.classList.contains("modal-close")) return;
       settingsModalOpen = false;
-      settingsTab = "account";
-      render();
-    });
-  });
-
-  document.querySelectorAll("[data-action='set-settings-tab']").forEach((button) => {
-    button.addEventListener("click", () => {
-      settingsTab = button.dataset.tab === "interface" ? "interface" : "account";
       render();
     });
   });
@@ -2220,7 +2254,6 @@ function bindCommonEvents() {
       clearSession();
       helperNotice = "";
       settingsModalOpen = false;
-      settingsTab = "account";
       navigate("login", { role: "client" });
     });
   });
@@ -2241,7 +2274,6 @@ function bindCommonEvents() {
         clearSession();
         helperNotice = "";
         settingsModalOpen = false;
-        settingsTab = "account";
         navigate("login", { role: "client" });
         return;
       }
@@ -2331,7 +2363,6 @@ function bindSettingsModal() {
     }
 
     settingsModalOpen = false;
-    settingsTab = "account";
     await saveState();
     render();
   });
@@ -2651,6 +2682,10 @@ function bindWorkerOnboarding() {
       showFormError(form, "Please add the parent email first.");
       return;
     }
+    if (!isEmailAvailableForParent(draft.parentEmail, draft.id)) {
+      showFormError(form, "That parent email is already tied to another student or client account.");
+      return;
+    }
     draft.parentConfirmed = false;
     draft.parentVerificationCode = generateVerificationCode();
     draft.parentVerificationSentAt = new Date().toISOString();
@@ -2668,6 +2703,10 @@ function bindWorkerOnboarding() {
       return;
     }
     const code = String(formData.get("parentVerificationCode") || "").trim();
+    if (!isEmailAvailableForParent(draft.parentEmail, draft.id)) {
+      showFormError(form, "That parent email is already tied to another student or client account.");
+      return;
+    }
     if (!draft.parentVerificationCode) {
       showFormError(form, "Send the parent code first.");
       return;
@@ -2705,6 +2744,10 @@ function bindWorkerOnboarding() {
   if (openParentViewButton) {
     openParentViewButton.addEventListener("click", () => {
       const draft = syncDraftWorker(new FormData(form));
+      if (!isEmailAvailableForParent(draft.parentEmail, draft.id)) {
+        showFormError(form, "That parent email is already tied to another student or client account.");
+        return;
+      }
       const parent = createAutoParentAccount(draft);
       if (parent) {
         state.selectedParentId = parent.id;
@@ -2828,6 +2871,10 @@ function findAccountByEmail(email, ignoreId = "") {
     Object.values(state.parents).find((item) => item.id !== ignoreId && normalizeEmail(item.email) === normalized) ||
     null
   );
+}
+
+function isEmailAvailableForParent(email, ignoreId = "") {
+  return !hasEmailConflict(email, ignoreId, ["client", "worker"]);
 }
 
 function verificationStateMessage(record, code, label = "Email") {

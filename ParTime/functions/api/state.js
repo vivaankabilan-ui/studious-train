@@ -22,6 +22,27 @@ function parseJson(value, fallback) {
   }
 }
 
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function duplicateEmailInState(state) {
+  const seen = new Map();
+  const records = [
+    ...(Object.values(state?.clients || {})),
+    ...(Object.values(state?.workers || {})),
+    ...(Object.values(state?.parents || {}))
+  ];
+
+  for (const record of records) {
+    const email = normalizeEmail(record.email);
+    if (!email) continue;
+    if (seen.has(email) && seen.get(email) !== record.id) return email;
+    seen.set(email, record.id);
+  }
+  return "";
+}
+
 async function ensureOptionalColumns(db) {
   const tables = [
     { table: "client_profiles", column: "ui_preferences" },
@@ -559,6 +580,10 @@ export async function onRequest(context) {
 
   if (request.method === "POST") {
     const state = await request.json();
+    const duplicateEmail = duplicateEmailInState(state);
+    if (duplicateEmail) {
+      return jsonResponse({ error: `Duplicate email detected: ${duplicateEmail}` }, { status: 400 });
+    }
     try {
       await env.DB.exec("BEGIN");
       await saveState(env.DB, state);

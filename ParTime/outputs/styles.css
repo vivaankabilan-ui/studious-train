@@ -24,6 +24,38 @@ html[data-theme="ocean"] {
   --aqua: #def5fb;
 }
 
+html[data-theme="sky"] {
+  --green: #1468b5;
+  --green-dark: #0e4d8a;
+  --blue: #3691f0;
+  --blue-soft: #e7f4ff;
+  --aqua: #e2f3ff;
+}
+
+html[data-theme="forest"] {
+  --green: #1f8b5f;
+  --green-dark: #106344;
+  --blue: #3b7d52;
+  --blue-soft: #e7f6ee;
+  --aqua: #dff6e9;
+}
+
+html[data-theme="sunset"] {
+  --green: #d86d3b;
+  --green-dark: #aa4e23;
+  --blue: #f29f54;
+  --blue-soft: #fff0e2;
+  --aqua: #fff1e8;
+}
+
+html[data-theme="berry"] {
+  --green: #8f4bc8;
+  --green-dark: #6932a0;
+  --blue: #bd6de0;
+  --blue-soft: #f5e9ff;
+  --aqua: #f1e2ff;
+}
+
 html[data-theme="midnight"] {
   --ink: #eaf0f3;
   --muted: #9ab0bb;
@@ -1454,6 +1486,20 @@ textarea:focus {
   padding-right: 44px;
 }
 
+.settings-section {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #f8fbfa;
+}
+
+.settings-section h3 {
+  margin-bottom: 0;
+  font-size: 1rem;
+}
+
 .settings-tabs {
   min-width: 260px;
   margin-bottom: 0;
@@ -1629,6 +1675,50 @@ textarea:focus {
 
   .settings-tabs {
     min-width: 0;
+  }
+
+  html[data-compact="true"] .hero-band,
+  html[data-compact="true"] .section-band,
+  html[data-compact="true"] .cta-band,
+  html[data-compact="true"] .dashboard-shell,
+  html[data-compact="true"] .form-page,
+  html[data-compact="true"] .auth-layout,
+  html[data-compact="true"] .verification-layout {
+    padding-top: 18px;
+    padding-bottom: 18px;
+  }
+
+  html[data-compact="true"] .panel,
+  html[data-compact="true"] .info-card,
+  html[data-compact="true"] .metric-card,
+  html[data-compact="true"] .job-card,
+  html[data-compact="true"] .auth-panel,
+  html[data-compact="true"] .trust-panel,
+  html[data-compact="true"] .profile-form,
+  html[data-compact="true"] .settings-modal {
+    padding: 14px;
+  }
+
+  html[data-compact="true"] .step-grid,
+  html[data-compact="true"] .metric-grid,
+  html[data-compact="true"] .job-grid,
+  html[data-compact="true"] .form-grid,
+  html[data-compact="true"] .check-grid,
+  html[data-compact="true"] .ui-settings-grid {
+    gap: 8px;
+  }
+
+  html[data-compact="true"] .page-heading-row,
+  html[data-compact="true"] .settings-head,
+  html[data-compact="true"] .dashboard-heading,
+  html[data-compact="true"] .job-topline,
+  html[data-compact="true"] .panel-heading {
+    gap: 10px;
+  }
+
+  html[data-compact="true"] .back-button {
+    min-height: 46px;
+    padding: 10px 16px;
   }
 
   .negotiable-bubble {
