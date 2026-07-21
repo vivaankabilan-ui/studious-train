@@ -838,6 +838,15 @@ function matchWorkers(job) {
     .slice(0, 3);
 }
 
+function jobFitScore(worker, job) {
+  let score = 0;
+  if (worker.services.includes(job.category)) score += 70;
+  if (worker.location === job.location) score += 20;
+  if (worker.certifications.length) score += 5;
+  if (job.negotiable) score += 3;
+  return score;
+}
+
 function addParentEvent(workerId, type, message) {
   state.parentEvents.unshift({
     id: `e${Date.now()}`,
@@ -1221,7 +1230,6 @@ function renderLogin() {
           </label>
           <button class="primary full" type="submit">Continue</button>
         </form>
-        <button class="text-link" data-view="create-account">Create an account</button>
       </div>
       <aside class="trust-panel">
         <h2>Built for supervised work</h2>
@@ -1880,6 +1888,7 @@ function renderApplicationRow(job, application) {
 
 function renderWorkerDashboard() {
   const worker = getWorker();
+  const prefs = activeUiPreferences();
   const applications = getApplicationsForWorker(worker.id);
   const inProgress = state.jobs.filter((job) => job.status === "In Progress" && job.acceptedWorkerId === worker.id);
   const feedJobs = getFilteredFeedJobs(worker.id);
@@ -1927,6 +1936,7 @@ function renderWorkerDashboard() {
             <span>${feedJobs.length} matching jobs</span>
           </div>
         </div>
+        ${prefs.automaticFilters ? `<div class="notice-banner">Automatic filters are on, so your feed starts with nearby matching jobs.</div>` : ""}
         <div class="feed-toolbar">
           <label>
             <span>Search</span>
@@ -2007,8 +2017,10 @@ function renderWorkerDashboard() {
 }
 
 function getFilteredFeedJobs(workerId) {
+  const worker = getWorker(workerId);
   const normalizedSearch = helperSearch.trim().toLowerCase();
-  return state.jobs
+  const prefs = activeUiPreferences();
+  let jobs = state.jobs
     .filter((job) => job.status === "Open")
     .filter((job) => helperFilter === "All" || job.category === helperFilter)
     .filter((job) => {
@@ -2018,8 +2030,19 @@ function getFilteredFeedJobs(workerId) {
         .join(" ")
         .toLowerCase()
         .includes(normalizedSearch);
-    })
-    .sort((a, b) => new Date(a.date) - new Date(b.date));
+    });
+
+  if (prefs.automaticFilters && !normalizedSearch && helperFilter === "All") {
+    jobs = jobs.filter((job) => worker.services.includes(job.category) || worker.location === job.location);
+  }
+
+  return jobs.sort((a, b) => {
+    if (prefs.smartSuggestions) {
+      const scoreDelta = jobFitScore(worker, b) - jobFitScore(worker, a);
+      if (scoreDelta) return scoreDelta;
+    }
+    return new Date(a.date) - new Date(b.date);
+  });
 }
 
 function renderWorkerJobCard(job, worker) {

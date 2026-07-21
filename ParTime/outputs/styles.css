@@ -84,6 +84,43 @@ html[data-compact="true"] .auth-layout {
   padding-bottom: 24px;
 }
 
+html[data-compact="true"] .topbar {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+html[data-compact="true"] .hero-copy h1,
+html[data-compact="true"] .auth-panel h1,
+html[data-compact="true"] .dashboard-heading h1,
+html[data-compact="true"] .section-heading h2,
+html[data-compact="true"] .cta-band h2 {
+  line-height: 0.98;
+}
+
+html[data-compact="true"] .panel,
+html[data-compact="true"] .info-card,
+html[data-compact="true"] .metric-card,
+html[data-compact="true"] .job-card,
+html[data-compact="true"] .auth-panel,
+html[data-compact="true"] .trust-panel,
+html[data-compact="true"] .profile-form,
+html[data-compact="true"] .settings-modal {
+  padding: 14px;
+}
+
+html[data-compact="true"] .feed-toolbar,
+html[data-compact="true"] .form-grid,
+html[data-compact="true"] .ui-settings-grid,
+html[data-compact="true"] .check-grid {
+  gap: 8px;
+}
+
+html[data-compact="true"] .stack-form label span,
+html[data-compact="true"] .profile-form label span,
+html[data-compact="true"] .settings-section h3 {
+  font-size: 0.84rem;
+}
+
 * {
   box-sizing: border-box;
 }
