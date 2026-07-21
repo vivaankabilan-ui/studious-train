@@ -1256,14 +1256,6 @@ function renderLogin() {
           <button class="primary full" type="submit">Continue</button>
         </form>
       </div>
-      <aside class="trust-panel">
-        <p>Student accounts require a parent email, students must be under 18, and every application creates a parent-visible activity record.</p>
-        <div class="mini-metrics">
-          <span><strong>${Object.keys(state.workers).length}</strong> verified students</span>
-          <span><strong>${state.jobs.filter((job) => job.status === "Open").length}</strong> open jobs</span>
-          <span><strong>${state.parentEvents.length}</strong> parent updates</span>
-        </div>
-      </aside>
     </section>
   `;
 }
