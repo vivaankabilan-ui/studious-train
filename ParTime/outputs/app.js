@@ -987,7 +987,7 @@ function renderSettingsModal() {
                 </label>
                 <label>
                   <span>Name</span>
-                  <input type="text" name="name" value="${escapeHtml(user.name)}" maxlength="120" required />
+                  <input type="text" name="name" maxlength="120" placeholder="Example: Maya" required />
                 </label>
                 <label>
                   <span>Phone number</span>
@@ -1349,7 +1349,7 @@ function renderClientDetailsForm() {
         <div class="form-grid onboarding-grid">
           <label>
             <span>Name</span>
-            <input type="text" name="name" value="${escapeHtml(client.name)}" maxlength="120" required />
+            <input type="text" name="name" maxlength="120" placeholder="Example: Maya" required />
           </label>
           <label>
             <span>Email</span>
@@ -1530,7 +1530,7 @@ function renderWorkerDetailsForm() {
           <div class="form-grid onboarding-grid">
             <label>
               <span>Name</span>
-              <input type="text" name="name" value="${escapeHtml(worker.name)}" maxlength="120" required />
+              <input type="text" name="name" maxlength="120" placeholder="Example: Maya" required />
             </label>
             <label>
               <span>Email</span>

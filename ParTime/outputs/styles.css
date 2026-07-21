@@ -713,6 +713,16 @@ textarea {
   outline: none;
 }
 
+input::placeholder,
+textarea::placeholder {
+  color: rgba(92, 111, 120, 0.55);
+}
+
+input:focus::placeholder,
+textarea:focus::placeholder {
+  color: rgba(92, 111, 120, 0.28);
+}
+
 select {
   appearance: none;
   background-image:
