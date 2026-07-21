@@ -1232,7 +1232,6 @@ function renderLogin() {
         </form>
       </div>
       <aside class="trust-panel">
-        <h2>Built for supervised work</h2>
         <p>Student accounts require a parent email, students must be under 18, and every application creates a parent-visible activity record.</p>
         <div class="mini-metrics">
           <span><strong>${Object.keys(state.workers).length}</strong> verified students</span>
