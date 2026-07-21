@@ -31,6 +31,7 @@ const defaultPhotos = {
 
 const API_STATE_ENDPOINT = "/api/state";
 const SESSION_KEY = "partime-auth-session-v1";
+const LOGIN_DRAFT_KEY = "partime-login-draft-v1";
 const ONBOARDING_KEY = "partime-onboarding-draft-v1";
 const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SEED_PASSWORD = "ParTime1234!";
@@ -221,6 +222,29 @@ function writeSession(session) {
 function clearSession() {
   try {
     sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function readRememberedLogin() {
+  try {
+    const raw = localStorage.getItem(LOGIN_DRAFT_KEY);
+    return raw ? JSON.parse(raw) : { email: "", password: "" };
+  } catch {
+    return { email: "", password: "" };
+  }
+}
+
+function writeRememberedLogin(email, password) {
+  try {
+    localStorage.setItem(
+      LOGIN_DRAFT_KEY,
+      JSON.stringify({
+        email: String(email || ""),
+        password: String(password || "")
+      })
+    );
   } catch {
     // ignore
   }
@@ -1212,6 +1236,7 @@ function renderLanding() {
 }
 
 function renderLogin() {
+  const rememberedLogin = readRememberedLogin();
   return `
     <section class="auth-layout">
       <div class="auth-panel">
@@ -1222,11 +1247,11 @@ function renderLogin() {
         <form class="stack-form" id="loginForm">
           <label>
             <span>Email</span>
-            <input type="email" name="email" value="" maxlength="254" required />
+            <input type="email" name="email" value="${escapeHtml(rememberedLogin.email || "")}" maxlength="254" autocomplete="username" required />
           </label>
           <label>
             <span>Password</span>
-            <input type="password" name="password" maxlength="128" required />
+            <input type="password" name="password" value="${escapeHtml(rememberedLogin.password || "")}" maxlength="128" autocomplete="current-password" required />
           </label>
           <button class="primary full" type="submit">Continue</button>
         </form>
@@ -2437,6 +2462,7 @@ function bindLogin() {
       return;
     }
 
+    writeRememberedLogin(email, password);
     writeSession({ role, id: user.id });
     if (role === "worker") navigate("worker-dashboard");
     else if (role === "parent") navigate("parent-monitor");
@@ -2593,6 +2619,7 @@ function bindClientOnboarding() {
     }
 
     Object.assign(draft, passwordRecord(password));
+    writeRememberedLogin(draft.email, password);
     saveOnboardingDraft("onboard-client", "details", draft.id);
     saveState();
     clearSession();
@@ -2847,6 +2874,7 @@ function bindWorkerOnboarding() {
     const commitWorker = (photo) => {
       Object.assign(draft, passwordRecord(password));
       if (photo) draft.photo = photo;
+      writeRememberedLogin(draft.email, password);
       draft.parentVerificationCode = "";
       draft.parentVerificationSentAt = draft.parentVerificationSentAt || new Date().toISOString();
       draft.parentVerifiedAt = draft.parentVerifiedAt || new Date().toISOString();
