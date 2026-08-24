@@ -538,6 +538,64 @@ h4 {
   grid-column: 1 / -1;
 }
 
+.review-strip {
+  position: relative;
+}
+
+.review-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.review-card {
+  display: flex;
+  min-height: 180px;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbfa 100%);
+  box-shadow: 0 10px 24px rgba(18, 45, 54, 0.06);
+}
+
+.review-card-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.review-stars {
+  color: #de9c2d;
+  letter-spacing: 0.08em;
+  font-weight: 900;
+}
+
+.review-badge {
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--blue-soft);
+  color: var(--green-dark);
+  font-size: 0.74rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.review-card p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.98rem;
+  line-height: 1.55;
+}
+
+.review-card strong {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .preview-metric-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

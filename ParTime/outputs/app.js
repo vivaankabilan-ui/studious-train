@@ -1509,12 +1509,13 @@ function renderHeader() {
                   <button type="button" role="menuitem" data-action="open-settings">Settings</button>
                   <button type="button" role="menuitem" data-action="open-my-profile">Profile</button>
                   <button type="button" role="menuitem" data-action="open-change-password">Change password</button>
-            <button type="button" role="menuitem" data-view="landing">Home</button>
-            ${session ? `<button type="button" role="menuitem" data-view="review">Review</button>` : ""}
+                  <button type="button" role="menuitem" data-view="landing">Home</button>
+                  <button type="button" role="menuitem" data-view="review">Review</button>
                   <button type="button" role="menuitem" data-action="logout">Logout</button>
                 `
                 : `
                   <button type="button" role="menuitem" data-view="landing">Home</button>
+                  <button type="button" role="menuitem" data-view="review">Review</button>
                   <button type="button" role="menuitem" data-action="brand-menu-nav" data-view="login">Log in</button>
                 `
             }
@@ -1615,7 +1616,10 @@ function renderAppReviewCard(review) {
   const stars = Math.max(1, Math.min(5, Number(review.stars) || 5));
   return `
     <article class="review-card">
-      <div class="review-stars" aria-label="${stars} star rating">${"★".repeat(stars)}${"☆".repeat(5 - stars)}</div>
+      <div class="review-card-topline">
+        <div class="review-stars" aria-label="${stars} star rating">${"★".repeat(stars)}${"☆".repeat(5 - stars)}</div>
+        ${stars >= 5 ? '<span class="review-badge">Top rated</span>' : ""}
+      </div>
       <p>“${escapeHtml(review.comment || "No comment left.")}”</p>
       <strong>${escapeHtml(review.name || "Anonymous")}${review.role ? `, ${escapeHtml(review.role)}` : ""}</strong>
     </article>
@@ -1724,6 +1728,15 @@ function renderLanding() {
           <p>A linked parent account sees applications, work in progress, completion history, and safety email updates.</p>
         </article>
       </div>
+    </section>
+
+    <section class="section-band review-strip">
+      <div class="section-heading">
+        <p class="eyebrow">Top reviews</p>
+        <h2>The best ratings show first.</h2>
+        <p class="muted">Press the Review item in the PT menu to leave a star rating and comment. The homepage keeps the highest-rated feedback at the top.</p>
+      </div>
+      <div class="review-grid"></div>
     </section>
 
     <section class="cta-band">
