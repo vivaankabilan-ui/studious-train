@@ -379,7 +379,14 @@ async function saveState(db, state) {
       state.selectedParentId || "p1",
       eventTypeToAction(event.type),
       event.workerId,
-      JSON.stringify({ message: event.message, eventType: event.type }),
+      JSON.stringify({
+        message: event.message,
+        eventType: event.type,
+        emailTo: event.emailTo || "",
+        emailSubject: event.emailSubject || "",
+        emailStatus: event.emailStatus || "",
+        emailSentAt: event.emailSentAt || ""
+      }),
       event.createdAt || new Date().toISOString()
     ).run();
   }
@@ -547,8 +554,12 @@ async function loadState(db) {
       return {
         id: activity.id,
         workerId: activity.entity_id || metadata.workerId || "",
-        type: activity.action_type.replace(/_/g, " "),
+        type: metadata.eventType || activity.action_type.replace(/_/g, " "),
         message: metadata.message || "",
+        emailTo: metadata.emailTo || "",
+        emailSubject: metadata.emailSubject || "",
+        emailStatus: metadata.emailStatus || "",
+        emailSentAt: metadata.emailSentAt || "",
         createdAt: activity.created_at
       };
     });

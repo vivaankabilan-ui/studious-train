@@ -30,6 +30,7 @@ const defaultPhotos = {
 };
 
 const API_STATE_ENDPOINT = "/api/state";
+const PARENT_EMAIL_ENDPOINT = "/api/parent-email";
 const SESSION_KEY = "partime-auth-session-v1";
 const LOGIN_DRAFT_KEY = "partime-login-draft-v1";
 const ONBOARDING_KEY = "partime-onboarding-draft-v1";
@@ -51,6 +52,12 @@ let authNotice = "";
 let profileModalWorkerId = "";
 let brandMenuOpen = false;
 let settingsModalOpen = false;
+let helpModalOpen = false;
+let notificationsModalOpen = false;
+let changePasswordModalOpen = false;
+let ratingGateJobId = "";
+let ratingGateStars = 0;
+let ratingGateComment = "";
 let saveQueue = Promise.resolve();
 
 function hashPassword(password, salt = "") {
@@ -79,6 +86,11 @@ function normalizeUiPreferences(preferences = {}) {
 
 function getSessionUser() {
   const session = readSession();
+  const localState = loadLocalState();
+  if (localState && Array.isArray(localState.appReviews)) {
+    state.appReviews = [...(localState.appReviews || []), ...(Array.isArray(state.appReviews) ? state.appReviews : [])]
+      .filter((review, index, list) => list.findIndex((entry) => entry.id === review.id) === index);
+  }
   if (!session) return null;
   if (session.role === "worker") return state.workers[session.id] || null;
   if (session.role === "parent") return state.parents[session.id] || null;
@@ -227,27 +239,73 @@ function clearSession() {
   }
 }
 
-function readRememberedLogin() {
+function clearRememberedLogin() {
   try {
-    const raw = localStorage.getItem(LOGIN_DRAFT_KEY);
-    return raw ? JSON.parse(raw) : { email: "", password: "" };
-  } catch {
-    return { email: "", password: "" };
-  }
-}
-
-function writeRememberedLogin(email, password) {
-  try {
-    localStorage.setItem(
-      LOGIN_DRAFT_KEY,
-      JSON.stringify({
-        email: String(email || ""),
-        password: String(password || "")
-      })
-    );
+    localStorage.removeItem(LOGIN_DRAFT_KEY);
   } catch {
     // ignore
   }
+}
+
+function newDraftId(prefix) {
+  return `${prefix}_${hashString(randomSalt()).slice(0, 10)}`;
+}
+
+function createBlankClientDraft() {
+  const id = newDraftId("client");
+  state.clients[id] = {
+    id,
+    role: "client",
+    name: "",
+    email: "",
+    phone: "",
+    emailVerificationCode: "",
+    emailVerificationSentAt: "",
+    emailVerifiedAt: "",
+    language: "",
+    location: "",
+    typicalServices: [],
+    preferredCurrency: "",
+    uiPreferences: normalizeUiPreferences(),
+    passwordHash: "",
+    passwordSalt: ""
+  };
+  state.selectedClientId = id;
+  return id;
+}
+
+function createBlankWorkerDraft() {
+  const id = newDraftId("worker");
+  state.workers[id] = {
+    id,
+    role: "worker",
+    name: "",
+    email: "",
+    phone: "",
+    emailVerificationCode: "",
+    emailVerificationSentAt: "",
+    emailVerifiedAt: "",
+    parentEmail: "",
+    parentConfirmed: false,
+    age: "",
+    school: "",
+    language: "",
+    location: "",
+    bio: "",
+    services: [],
+    certifications: [],
+    photo: "",
+    uiPreferences: normalizeUiPreferences(),
+    passwordHash: "",
+    passwordSalt: "",
+    parentVerificationCode: "",
+    parentVerificationSentAt: "",
+    parentVerifiedAt: "",
+    ratings: [],
+    nextTimes: []
+  };
+  state.selectedWorkerId = id;
+  return id;
 }
 
 function createDefaultState() {
@@ -555,7 +613,8 @@ function createDefaultState() {
         message: "Maya applied for Plant balcony herbs.",
         createdAt: "2026-07-01T18:05:00"
       }
-    ]
+    ],
+    notifications: []
   };
 }
 
@@ -753,19 +812,23 @@ function statusClass(status) {
 }
 
 function categoryOptions(selected = "") {
-  return categories
-    .map(
-      (category) =>
-        `<option value="${escapeHtml(category)}" ${category === selected ? "selected" : ""}>${escapeHtml(category)}</option>`
+  return [`<option value="">Choose a category</option>`]
+    .concat(
+      categories.map(
+        (category) =>
+          `<option value="${escapeHtml(category)}" ${category === selected ? "selected" : ""}>${escapeHtml(category)}</option>`
+      )
     )
     .join("");
 }
 
 function currencyOptions(selected = "USD") {
-  return currencies
-    .map(
-      ({ code, label }) =>
-        `<option value="${escapeHtml(code)}" ${code === selected ? "selected" : ""}>${escapeHtml(label)}</option>`
+  return [`<option value="">Choose a currency</option>`]
+    .concat(
+      currencies.map(
+        ({ code, label }) =>
+          `<option value="${escapeHtml(code)}" ${code === selected ? "selected" : ""}>${escapeHtml(label)}</option>`
+      )
     )
     .join("");
 }
@@ -806,10 +869,12 @@ function chipList(items, className = "") {
 
 function renderAvatar(worker, size = "") {
   const className = `avatar ${size}`.trim();
+  const name = String(worker.name || "").trim();
+  const photo = worker.photo || "assets/favicon.png";
   return `
     <div class="${className}">
-      <img src="${escapeHtml(worker.photo)}" alt="${escapeHtml(worker.name)}" />
-      <span>${escapeHtml(initials(worker.name))}</span>
+      <img src="${escapeHtml(photo)}" alt="${escapeHtml(name || "Profile photo placeholder")}" />
+      <span>${escapeHtml(name ? initials(name) : "")}</span>
     </div>
   `;
 }
@@ -834,6 +899,37 @@ function ratingSummary(worker) {
   return `★ ${average.toFixed(1)} / 5 (${ratings.length} ratings)`;
 }
 
+function renderPublicRatings(worker) {
+  const ratings = worker.ratings || [];
+  if (ratings.length < 5) {
+    return `<p class="muted">Public ratings will appear after 5 completed job reviews.</p>`;
+  }
+
+  const average = ratings.reduce((sum, rating) => sum + Number(rating.stars || 0), 0) / ratings.length;
+  const recentRatings = ratings
+    .slice()
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, 3);
+
+  return `
+    <div class="rating-history">
+      <p><strong>${starsText(Math.round(average))}</strong> ${average.toFixed(1)} / 5 average from ${ratings.length} reviews</p>
+      ${
+        recentRatings
+          .map(
+            (rating) => `
+              <article class="rating-history-item">
+                <strong>${escapeHtml(starsText(rating.stars))}</strong>
+                <span>${escapeHtml(rating.comment || "No comment left.")}</span>
+              </article>
+            `
+          )
+          .join("")
+      }
+    </div>
+  `;
+}
+
 function alreadyNextTimed(worker, clientId, jobId) {
   return (worker.nextTimes || []).some((item) => item.clientId === clientId && item.jobId === jobId);
 }
@@ -846,39 +942,219 @@ function sameDayConflict(workerId, candidateJob) {
 }
 
 function matchWorkers(job) {
+  const jobLocation = String(job.location || "").toLowerCase();
   return Object.values(state.workers)
     .filter((worker) => worker.parentConfirmed && Number(worker.age) < 18)
     .map((worker) => {
-      const serviceMatch = worker.services.includes(job.category) ? 70 : 0;
-      const locationMatch = worker.location === job.location ? 20 : 8;
-      const certificationMatch = worker.certifications.length ? 5 : 0;
+      const workerLocation = String(worker.location || "").toLowerCase();
+      const serviceMatch = worker.services.includes(job.category) ? 48 : 0;
+      const locationMatch = workerLocation === jobLocation ? 22 : workerLocation.includes(jobLocation) || jobLocation.includes(workerLocation) ? 12 : 0;
+      const ratingValues = (worker.ratings || []).map((rating) => Number(rating.stars || 0));
+      const ratingAverage = ratingValues.length >= 5 ? ratingValues.reduce((sum, stars) => sum + stars, 0) / ratingValues.length : 0;
+      const ratingMatch = ratingAverage ? Math.round((ratingAverage / 5) * 18) : 0;
+      const certificationMatch = Math.min((worker.certifications || []).length * 2, 8);
+      const previousClientMatch = state.jobs.some(
+        (candidateJob) =>
+          candidateJob.clientId === job.clientId &&
+          candidateJob.acceptedWorkerId === worker.id &&
+          candidateJob.status === "Completed"
+      )
+        ? 8
+        : 0;
       return {
         worker,
-        score: serviceMatch + locationMatch + certificationMatch
+        score: serviceMatch + locationMatch + ratingMatch + certificationMatch + previousClientMatch
       };
     })
-    .filter((match) => match.score >= 70)
+    .filter((match) => match.score >= 60)
     .sort((a, b) => b.score - a.score)
     .slice(0, 3);
 }
 
 function jobFitScore(worker, job) {
-  let score = 0;
-  if (worker.services.includes(job.category)) score += 70;
-  if (worker.location === job.location) score += 20;
-  if (worker.certifications.length) score += 5;
-  if (job.negotiable) score += 3;
-  return score;
+  const match = matchWorkers(job).find((entry) => entry.worker.id === worker.id);
+  if (match) return match.score;
+  const workerLocation = String(worker.location || "").toLowerCase();
+  const jobLocation = String(job.location || "").toLowerCase();
+  const serviceMatch = worker.services.includes(job.category) ? 48 : 0;
+  const locationMatch = workerLocation === jobLocation ? 22 : workerLocation.includes(jobLocation) || jobLocation.includes(workerLocation) ? 12 : 0;
+  const ratingValues = (worker.ratings || []).map((rating) => Number(rating.stars || 0));
+  const ratingAverage = ratingValues.length >= 5 ? ratingValues.reduce((sum, stars) => sum + stars, 0) / ratingValues.length : 0;
+  const ratingMatch = ratingAverage ? Math.round((ratingAverage / 5) * 18) : 0;
+  const certificationMatch = Math.min((worker.certifications || []).length * 2, 8);
+  return serviceMatch + locationMatch + ratingMatch + certificationMatch + (job.negotiable ? 3 : 0);
+}
+
+function parentForWorker(worker) {
+  if (!worker) return null;
+  const existing =
+    Object.values(state.parents).find((parent) => parent.linkedWorkerId === worker.id) ||
+    Object.values(state.parents).find((parent) => normalizeEmail(parent.email) === normalizeEmail(worker.parentEmail));
+  if (existing) return existing;
+  const selectedParentId = state.selectedParentId;
+  const parent = createAutoParentAccount(worker);
+  state.selectedParentId = selectedParentId;
+  return parent;
+}
+
+function parentEmailSubject(type, worker) {
+  return `ParTime update: ${type} for ${worker?.name || "your child"}`;
 }
 
 function addParentEvent(workerId, type, message) {
-  state.parentEvents.unshift({
-    id: `e${Date.now()}`,
+  const worker = state.workers[workerId];
+  const parent = parentForWorker(worker);
+  const emailTo = normalizeEmail(parent?.email || worker?.parentEmail || "");
+  const event = {
+    id: `e${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
     workerId,
     type,
     message,
+    emailTo,
+    emailSubject: parentEmailSubject(type, worker),
+    emailStatus: emailTo ? "Queued" : "No parent email",
+    emailSentAt: "",
     createdAt: new Date().toISOString()
-  });
+  };
+
+  state.parentEvents.unshift(event);
+  if (parent?.id) {
+    pushNotification("parent", parent.id, type, message, {
+      workerId,
+      emailTo
+    });
+  }
+  if (emailTo) deliverParentEmail(event, worker, parent);
+  return event;
+}
+
+function ensureNotificationStore() {
+  if (!Array.isArray(state.notifications)) {
+    state.notifications = [];
+  }
+}
+
+function pushNotification(role, userId, title, message, meta = {}) {
+  ensureNotificationStore();
+  const notification = {
+    id: `n${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
+    role,
+    userId,
+    title,
+    message,
+    meta,
+    readAt: "",
+    createdAt: new Date().toISOString()
+  };
+  state.notifications.unshift(notification);
+  return notification;
+}
+
+function notificationsForCurrentSession() {
+  const session = readSession();
+  if (!session) return [];
+  ensureNotificationStore();
+  return state.notifications.filter((notification) => notification.role === session.role && notification.userId === session.id);
+}
+
+function unreadNotificationCount() {
+  return notificationsForCurrentSession().filter((notification) => !notification.readAt).length;
+}
+
+function markNotificationsRead() {
+  const notifications = notificationsForCurrentSession();
+  if (!notifications.length) return;
+  const ids = new Set(notifications.map((notification) => notification.id));
+  state.notifications = state.notifications.map((notification) =>
+    ids.has(notification.id) && !notification.readAt ? { ...notification, readAt: new Date().toISOString() } : notification
+  );
+}
+
+function getNotificationPreview(notification) {
+  const suggestion = notification.meta?.suggestedMatch;
+  if (suggestion) {
+    return `${notification.message} Suggested match: ${suggestion}.`;
+  }
+  if (notification.meta?.comment) {
+    return `${notification.message} Comment: ${notification.meta.comment}`;
+  }
+  return notification.message;
+}
+
+function jobMatchLabel(job, worker) {
+  const score = jobFitScore(worker, job);
+  return `${worker.name} · ${score}% fit`;
+}
+
+function bestMatchForJob(job) {
+  const matches = matchWorkers(job);
+  return matches.length ? jobMatchLabel(job, matches[0].worker) : "No strong match yet";
+}
+
+function activeRatingJob() {
+  return state.jobs.find((job) => job.id === ratingGateJobId) || null;
+}
+
+function openRatingGate(jobId) {
+  ratingGateJobId = jobId;
+  ratingGateStars = 0;
+  ratingGateComment = "";
+}
+
+function closeRatingGate() {
+  ratingGateJobId = "";
+  ratingGateStars = 0;
+  ratingGateComment = "";
+}
+
+function renderNotificationList() {
+  const notifications = notificationsForCurrentSession();
+  if (!notifications.length) {
+    return renderEmpty("Your notifications will appear here.");
+  }
+
+  return `
+    <div class="notification-list">
+      ${notifications
+        .map(
+          (notification) => `
+            <article class="notification-item ${notification.readAt ? "is-read" : ""}">
+              <strong>${escapeHtml(notification.title)}</strong>
+              <p>${escapeHtml(getNotificationPreview(notification))}</p>
+              <small>${dateTimeLabel(notification.createdAt)}</small>
+            </article>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+async function deliverParentEmail(event, worker, parent) {
+  try {
+    const response = await fetch(PARENT_EMAIL_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        to: event.emailTo,
+        subject: event.emailSubject,
+        message: event.message,
+        type: event.type,
+        childName: worker?.name || "",
+        parentName: parent?.name || "Parent"
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Unable to send parent email.");
+    event.emailStatus = payload.sent ? "Sent" : payload.status === "not_configured" ? "Email provider not configured" : "Queued";
+    event.emailSentAt = payload.sentAt || new Date().toISOString();
+  } catch {
+    event.emailStatus = "Email queued";
+  }
+  saveState();
+  if (view === "parent-monitor") render();
 }
 
 function displayNameFromEmail(email) {
@@ -923,6 +1199,10 @@ function navigate(nextView, meta = {}) {
   view = nextView;
   routeMeta = meta;
   brandMenuOpen = false;
+  helpModalOpen = false;
+  notificationsModalOpen = false;
+  changePasswordModalOpen = false;
+  closeRatingGate();
   if (String(nextView).startsWith("onboard-")) {
     saveOnboardingDraft(nextView, meta.stage || "verify", meta.id || "");
   } else if (nextView === "login" || nextView === "create-account" || nextView === "landing") {
@@ -942,11 +1222,39 @@ function render() {
     <main>
       ${renderView()}
     </main>
+    ${renderRatingGateModal()}
+    ${renderNotificationsModal()}
+    ${renderChangePasswordModal()}
     ${renderProfileModal()}
     ${renderSettingsModal()}
+    ${renderHelpModal()}
   `;
   bindCommonEvents();
   bindViewEvents();
+}
+
+function infoButton(info) {
+  return `<button class="field-info-button" type="button" data-action="toggle-field-info" data-info="${escapeHtml(info)}" aria-label="About this setting" aria-expanded="false">i</button>`;
+}
+
+function settingsLabel(label, info) {
+  return `
+    <span class="label-with-info">
+      <span>${escapeHtml(label)}</span>
+      ${infoButton(info)}
+    </span>
+    <small class="field-info-text" hidden>${escapeHtml(info)}</small>
+  `;
+}
+
+function settingsLegend(label, info) {
+  return `
+    <legend class="label-with-info">
+      <span>${escapeHtml(label)}</span>
+      ${infoButton(info)}
+    </legend>
+    <small class="field-info-text" hidden>${escapeHtml(info)}</small>
+  `;
 }
 
 function renderProfileModal() {
@@ -962,12 +1270,12 @@ function renderProfileModal() {
           <div>
             <p class="eyebrow">Student profile</p>
             <h2>${escapeHtml(worker.name)}</h2>
+            <span class="profile-age">Age ${escapeHtml(worker.age)}</span>
             <span class="profile-rating">${escapeHtml(ratingSummary(worker))}</span>
           </div>
         </div>
         <p>${escapeHtml(worker.bio)}</p>
         <div class="profile-detail-grid">
-          <span><strong>Age</strong>${escapeHtml(worker.age)}</span>
           <span><strong>School</strong>${escapeHtml(worker.school)}</span>
           <span><strong>Location</strong>${escapeHtml(worker.location)}</span>
           <span><strong>Language</strong>${escapeHtml(worker.language)}</span>
@@ -979,6 +1287,44 @@ function renderProfileModal() {
         <div class="profile-section">
           <h3>Certifications and skills</h3>
           <div class="chip-row">${chipList(worker.certifications, "soft")}</div>
+        </div>
+        <div class="profile-section">
+          <h3>Public ratings</h3>
+          ${renderPublicRatings(worker)}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderHelpModal() {
+  if (!helpModalOpen) return "";
+  return `
+    <div class="modal-backdrop help-backdrop" data-action="close-help">
+      <section class="help-modal" role="dialog" aria-modal="true" aria-label="How ParTime works">
+        <button class="modal-close" data-action="close-help" aria-label="Close help">x</button>
+        <div class="help-head">
+          <p class="eyebrow">Help</p>
+          <h2>How ParTime Works</h2>
+          <p class="muted">Use ParTime to create a local job flow between clients, students, and parents.</p>
+        </div>
+        <div class="help-grid">
+          <article>
+            <h3>Clients</h3>
+            <p>Post a job with a category, date, pay details, and location. Open the bell to review requests and suggested matches, accept the best helper, then finish with the rating screen.</p>
+          </article>
+          <article>
+            <h3>Students</h3>
+            <p>Complete the student profile, verify student and parent emails, then apply for jobs that fit your services and schedule. The bell shows accepted jobs, next-time updates, and feedback.</p>
+          </article>
+          <article>
+            <h3>Parents</h3>
+            <p>Parent accounts get a read-only view of the child profile, applications, accepted work, Next Time updates, completions, the email log, and the public star rating with comments.</p>
+          </article>
+          <article>
+            <h3>Settings</h3>
+            <p>Open Settings from the ParTime menu to update profile details and interface preferences. Use the separate Change password item for the old password and new password flow, and tap any small i button for a quick explanation.</p>
+          </article>
         </div>
       </section>
     </div>
@@ -1004,7 +1350,7 @@ function renderSettingsModal() {
           <div>
             <p class="eyebrow">Settings</p>
             <h2>${escapeHtml(title)}</h2>
-            <span class="muted">Update account details, passwords, and UI preferences.</span>
+            <span class="muted">Update account details and UI preferences.</span>
           </div>
         </div>
 
@@ -1019,81 +1365,78 @@ function renderSettingsModal() {
                   <input type="email" value="${escapeHtml(user.email)}" readonly />
                 </label>
                 <label>
-                  <span>Name</span>
+                  ${settingsLabel("Name", "This is the display name shown on your account, dashboard, and profile.")}
                   <input type="text" name="name" maxlength="120" placeholder="Example: Maya" required />
                 </label>
                 <label>
-                  <span>Phone number</span>
+                  ${settingsLabel("Phone number", "This is used as account contact information and can be left optional if you do not want to add one.")}
                   <input type="tel" name="phone" value="${escapeHtml(user.phone || "")}" maxlength="30" placeholder="Optional" />
                 </label>
                 <label>
-                  <span>Address / location</span>
+                  ${settingsLabel("Address / location", "This helps match jobs and people in the same local area.")}
                   <input type="text" name="location" value="${escapeHtml(user.location || "")}" maxlength="120" required />
                 </label>
                 <label>
-                  <span>What language do you speak?</span>
+                  ${settingsLabel("What language do you speak?", "This lets other users know which language is easiest for communication.")}
                   <select name="language" required>${languageOptions(user.language || "English")}</select>
-                </label>
-                <label>
-                  <span>New password</span>
-                  <input type="password" name="password" maxlength="128" placeholder="Leave blank to keep current password" />
-                </label>
-                <label>
-                  <span>Confirm new password</span>
-                  <input type="password" name="confirmPassword" maxlength="128" placeholder="Leave blank to keep current password" />
                 </label>
                 ${
                   role === "client"
                     ? `
-                      <label>
-                        <span>Preferred currency</span>
-                        <select name="preferredCurrency" required>${currencyOptions(user.preferredCurrency || "USD")}</select>
-                      </label>
+	                      <label>
+	                        ${settingsLabel("Preferred currency", "This is the default currency used when you post or review jobs.")}
+	                        <select name="preferredCurrency" required>${currencyOptions(user.preferredCurrency || "USD")}</select>
+	                      </label>
                     `
                     : ""
                 }
                 ${
                   role === "worker"
                     ? `
-                      <label>
-                        <span>Age</span>
-                        <input type="number" name="age" value="${escapeHtml(user.age)}" min="13" max="17" required />
-                      </label>
-                      <label>
-                        <span>School</span>
-                        <input type="text" name="school" value="${escapeHtml(user.school || "")}" maxlength="120" required />
-                      </label>
+	                      <label>
+	                        ${settingsLabel("Age", "Student accounts must stay between 13 and 17 years old.")}
+	                        <input type="number" name="age" value="${escapeHtml(user.age)}" min="13" max="17" required />
+	                      </label>
+	                      <label>
+	                        ${settingsLabel("School", "This helps clients and parents understand the student's local context.")}
+	                        <input type="text" name="school" value="${escapeHtml(user.school || "")}" maxlength="120" required />
+	                      </label>
                     `
                     : ""
                 }
               </div>
               <fieldset>
-                <legend>${role === "worker" ? "Services offered" : "Jobs you are interested in"}</legend>
+                ${settingsLegend(
+                  role === "worker" ? "Services offered" : "Jobs you are interested in",
+                  role === "worker"
+                    ? "Choose the types of jobs this student can offer."
+                    : "Choose the types of jobs you usually need help with."
+                )}
                 <div class="check-grid">${serviceCheckboxes(services)}</div>
               </fieldset>
               ${
                 role === "worker"
                   ? `
-                    <div class="more-service-card">
-                      <h3>More service</h3>
-                      <label>
-                        <span>Write another job or service you can offer</span>
-                        <textarea
+	                    <div class="more-service-card">
+	                      <h3>More service</h3>
+	                      <label>
+	                        ${settingsLabel("Write another job or service you can offer", "Add custom services that are not listed in the checkbox choices.")}
+	                        <textarea
                           name="customService"
                           rows="3"
                           maxlength="180"
                           placeholder="Write another service, such as car washing or party setup"
                         >${escapeHtml(moreServiceValue)}</textarea>
                       </label>
-                    </div>
-                    <label>
-                      <span>Short bio</span>
-                      <textarea name="bio" rows="4" maxlength="500" required>${escapeHtml(user.bio || "")}</textarea>
-                    </label>
-                    <label>
-                      <span>Certifications and skills</span>
-                      <input type="text" name="certifications" value="${escapeHtml((user.certifications || []).join(", "))}" maxlength="300" required />
-                    </label>
+	                    </div>
+	                    <label>
+	                      ${settingsLabel("Short bio", "This short profile summary helps clients understand the student's strengths and availability.")}
+	                      <textarea name="bio" rows="4" maxlength="500" required>${escapeHtml(user.bio || "")}</textarea>
+	                    </label>
+	                    <label>
+	                      ${settingsLabel("Certifications and skills", "List skills, classes, clubs, or training that support the student's profile.")}
+	                      <input type="text" name="certifications" value="${escapeHtml((user.certifications || []).join(", "))}" maxlength="300" required />
+	                    </label>
                   `
                   : ""
               }
@@ -1101,9 +1444,9 @@ function renderSettingsModal() {
             <section class="settings-section">
               <h3>Interface</h3>
               <div class="ui-settings-grid">
-                <label class="themed-select-label">
-                  <span>Colour theme</span>
-                  <select name="theme">
+	                <label class="themed-select-label">
+	                  ${settingsLabel("Colour theme", "Changes the color theme used across the app.")}
+	                  <select name="theme">
                     <option value="emerald" ${uiPreferences.theme === "emerald" ? "selected" : ""}>Emerald</option>
                     <option value="ocean" ${uiPreferences.theme === "ocean" ? "selected" : ""}>Ocean</option>
                     <option value="sky" ${uiPreferences.theme === "sky" ? "selected" : ""}>Sky</option>
@@ -1113,18 +1456,24 @@ function renderSettingsModal() {
                     <option value="midnight" ${uiPreferences.theme === "midnight" ? "selected" : ""}>Midnight</option>
                   </select>
                 </label>
-                <label class="toggle-chip">
-                  <input type="checkbox" name="automaticFilters" ${uiPreferences.automaticFilters ? "checked" : ""} />
-                  <span>Automatic filters</span>
-                </label>
-                <label class="toggle-chip">
-                  <input type="checkbox" name="compactMode" ${uiPreferences.compactMode ? "checked" : ""} />
-                  <span>Compact layout</span>
-                </label>
-                <label class="toggle-chip">
-                  <input type="checkbox" name="smartSuggestions" ${uiPreferences.smartSuggestions ? "checked" : ""} />
-                  <span>Smart suggestions</span>
-                </label>
+	                <label class="toggle-chip has-info">
+	                  <input type="checkbox" name="automaticFilters" ${uiPreferences.automaticFilters ? "checked" : ""} />
+	                  <span>Automatic filters</span>
+	                  ${infoButton("When enabled, the student feed highlights the best local job matches automatically.")}
+	                  <small class="field-info-text" hidden>When enabled, the student feed highlights the best local job matches automatically.</small>
+	                </label>
+	                <label class="toggle-chip has-info">
+	                  <input type="checkbox" name="compactMode" ${uiPreferences.compactMode ? "checked" : ""} />
+	                  <span>Compact layout</span>
+	                  ${infoButton("Makes spacing tighter so more dashboard information fits on the screen.")}
+	                  <small class="field-info-text" hidden>Makes spacing tighter so more dashboard information fits on the screen.</small>
+	                </label>
+	                <label class="toggle-chip has-info">
+	                  <input type="checkbox" name="smartSuggestions" ${uiPreferences.smartSuggestions ? "checked" : ""} />
+	                  <span>Smart suggestions</span>
+	                  ${infoButton("Shows helpful suggestions based on service type, location, and account activity.")}
+	                  <small class="field-info-text" hidden>Shows helpful suggestions based on service type, location, and account activity.</small>
+	                </label>
               </div>
             </section>
           </div>
@@ -1140,10 +1489,12 @@ function renderSettingsModal() {
 
 function renderHeader() {
   const session = readSession();
+  const showTopActions = Boolean(session) && !["login", "create-account", "onboard-client", "onboard-worker"].includes(view);
+  const notificationCount = unreadNotificationCount();
   return `
     <header class="topbar">
       <div class="brand-wrap">
-        <button class="brand" type="button" data-action="toggle-brand-menu" aria-expanded="${brandMenuOpen ? "true" : "false"}" aria-haspopup="menu" aria-label="ParTime menu">
+        <button class="brand" type="button" data-action="toggle-brand-menu" aria-expanded="${brandMenuOpen ? "true" : "false"}" aria-haspopup="menu" aria-label="Open ParTime menu">
           <span class="brand-mark">PT</span>
           <span>
             <strong>ParTime</strong>
@@ -1156,13 +1507,33 @@ function renderHeader() {
               session
                 ? `
                   <button type="button" role="menuitem" data-action="open-settings">Settings</button>
+                  <button type="button" role="menuitem" data-action="open-my-profile">Profile</button>
+                  <button type="button" role="menuitem" data-action="open-change-password">Change password</button>
+            <button type="button" role="menuitem" data-view="landing">Home</button>
+            ${session ? `<button type="button" role="menuitem" data-view="review">Review</button>` : ""}
                   <button type="button" role="menuitem" data-action="logout">Logout</button>
                 `
-                : `<button type="button" role="menuitem" data-action="brand-menu-nav" data-view="login">Log in</button>`
+                : `
+                  <button type="button" role="menuitem" data-view="landing">Home</button>
+                  <button type="button" role="menuitem" data-action="brand-menu-nav" data-view="login">Log in</button>
+                `
             }
           </div>
         ` : ""}
       </div>
+      ${
+        showTopActions
+          ? `
+            <div class="topbar-actions">
+              <button class="notification-button" type="button" data-action="open-notifications" aria-label="Open notifications">
+                <span class="notification-button-icon" aria-hidden="true">${notificationBellSvg()}</span>
+                ${notificationCount ? `<span class="notification-count">${notificationCount}</span>` : ""}
+              </button>
+              <button class="secondary small help-button" type="button" data-action="open-help">Help</button>
+            </div>
+          `
+          : ""
+      }
     </header>
   `;
 }
@@ -1175,7 +1546,132 @@ function renderView() {
   if (view === "client-dashboard") return renderClientDashboard();
   if (view === "worker-dashboard") return renderWorkerDashboard();
   if (view === "parent-monitor") return renderParentMonitor();
+  if (view === "review") return renderReviewPage();
   return renderLanding();
+}
+
+function renderLandingPreview() {
+  return `
+    <div class="home-preview">
+      <div class="home-preview-window">
+        <div class="home-preview-logo">
+          <span class="brand-mark brand-mark--hero">PT</span>
+          <strong>ParTime</strong>
+          <small>Student services marketplace</small>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function reviewFallbacks() {
+  return [
+    {
+      id: "seed-review-1",
+      name: "Jordan",
+      role: "client",
+      stars: 5,
+      comment: "The app felt really easy to use, and I liked being able to see everything in one place.",
+      createdAt: "2026-01-01T12:00:00.000Z"
+    },
+    {
+      id: "seed-review-2",
+      name: "Maya",
+      role: "student",
+      stars: 5,
+      comment: "I could apply fast, and the notifications made it simple to keep track of what was happening.",
+      createdAt: "2026-01-02T12:00:00.000Z"
+    },
+    {
+      id: "seed-review-3",
+      name: "Ana",
+      role: "parent",
+      stars: 4,
+      comment: "It feels trustworthy and clear. The parent view makes the whole setup a lot more comfortable.",
+      createdAt: "2026-01-03T12:00:00.000Z"
+    }
+  ];
+}
+
+function appReviewsForDisplay(limit = 3) {
+  const reviews = [...reviewFallbacks(), ...(Array.isArray(state.appReviews) ? state.appReviews : [])]
+    .sort((a, b) => {
+      const starsDiff = (Number(b.stars) || 0) - (Number(a.stars) || 0);
+      if (starsDiff !== 0) return starsDiff;
+      return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+    });
+  const seen = new Set();
+  return reviews
+    .filter((review) => {
+      const key = review.id || `${review.name}-${review.comment}-${review.createdAt}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
+}
+
+function renderAppReviewCard(review) {
+  const stars = Math.max(1, Math.min(5, Number(review.stars) || 5));
+  return `
+    <article class="review-card">
+      <div class="review-stars" aria-label="${stars} star rating">${"★".repeat(stars)}${"☆".repeat(5 - stars)}</div>
+      <p>“${escapeHtml(review.comment || "No comment left.")}”</p>
+      <strong>${escapeHtml(review.name || "Anonymous")}${review.role ? `, ${escapeHtml(review.role)}` : ""}</strong>
+    </article>
+  `;
+}
+
+function renderReviewPage() {
+  const session = readSession();
+  const user = getSessionUser();
+  const lockedOut = !session || !user;
+  const starsOptions = [1, 2, 3, 4, 5].map((value) => `<option value="${value}">${"★".repeat(value)}</option>`).join("");
+
+  return `
+    <section class="auth-layout auth-layout--single auth-layout--login review-layout">
+      <div class="auth-panel auth-panel--login review-panel">
+        <div class="section-heading">
+          <p class="eyebrow">Review</p>
+          <h1>Leave a review</h1>
+          <p class="muted">Pick a star rating and add a short comment if you want.</p>
+        </div>
+        ${
+          lockedOut
+            ? `
+              <div class="panel muted">
+                Sign in first so your review is tied to your account.
+              </div>
+            `
+            : `
+              <form class="settings-form review-form" id="reviewForm">
+                <label>
+                  <span>Star rating</span>
+                  <select name="stars" required>
+                    ${starsOptions}
+                  </select>
+                </label>
+                <label>
+                  <span>Comment</span>
+                  <textarea name="comment" rows="5" maxlength="500" placeholder="Optional comment about the experience"></textarea>
+                </label>
+                <div class="form-actions">
+                  <button class="primary" type="submit">Save review</button>
+                  <button class="secondary" type="button" data-view="landing">Back</button>
+                </div>
+                <p class="muted">Posting as ${escapeHtml(user.name || "you")}.</p>
+              </form>
+            `
+        }
+      </div>
+    </section>
+  `;
+}
+
+function hydrateReviewSection() {
+  const reviewGrid = document.querySelector(".review-grid");
+  if (!reviewGrid) return;
+  reviewGrid.innerHTML = appReviewsForDisplay().map(renderAppReviewCard).join("");
 }
 
 function renderLanding() {
@@ -1191,15 +1687,19 @@ function renderLanding() {
           <button class="primary" data-view="login">Sign in</button>
           <button class="secondary" data-view="create-account">Create account</button>
         </div>
+        <div class="dashboard-jump-row">
+          <button class="ghost small" data-view="client-dashboard">Client dashboard</button>
+          <button class="ghost small" data-view="worker-dashboard">Student dashboard</button>
+        </div>
         <div class="trust-row" aria-label="Marketplace trust notes">
           <span>Parent confirmation</span>
           <span>Fixed or hourly pay</span>
           <span>Read-only safety view</span>
         </div>
       </div>
-      <figure class="hero-visual">
-        <img src="assets/partime-hero.png" alt="ParTime dashboard preview with job cards, student profiles, ratings, and parent updates" />
-      </figure>
+      <div class="hero-visual hero-visual--app">
+        ${renderLandingPreview()}
+      </div>
     </section>
 
     <section class="section-band">
@@ -1236,10 +1736,9 @@ function renderLanding() {
 }
 
 function renderLogin() {
-  const rememberedLogin = readRememberedLogin();
   return `
-    <section class="auth-layout">
-      <div class="auth-panel">
+    <section class="auth-layout auth-layout--single auth-layout--login">
+      <div class="auth-panel auth-panel--login">
         ${renderAuthNotice()}
         <p class="eyebrow">Secure access</p>
         <h1>Sign in</h1>
@@ -1247,11 +1746,11 @@ function renderLogin() {
         <form class="stack-form" id="loginForm">
           <label>
             <span>Email</span>
-            <input type="email" name="email" value="${escapeHtml(rememberedLogin.email || "")}" maxlength="254" autocomplete="username" required />
+            <input type="email" name="email" maxlength="254" autocomplete="username" placeholder="name@example.com" required />
           </label>
           <label>
             <span>Password</span>
-            <input type="password" name="password" value="${escapeHtml(rememberedLogin.password || "")}" maxlength="128" autocomplete="current-password" required />
+            <input type="password" name="password" maxlength="128" autocomplete="current-password" placeholder="Password" required />
           </label>
           <button class="primary full" type="submit">Continue</button>
         </form>
@@ -1262,7 +1761,7 @@ function renderLogin() {
 
 function renderCreateAccount() {
   return `
-    <section class="auth-layout">
+    <section class="auth-layout auth-layout--single">
       <div class="auth-panel">
         ${renderAuthNotice()}
         <p class="eyebrow">New account</p>
@@ -1272,12 +1771,12 @@ function renderCreateAccount() {
           <button class="text-link" type="button" data-view="login">Back</button>
         </div>
         <div class="account-choice-grid">
-          <button class="account-card account-card--client account-card--large" data-view="onboard-client" data-stage="verify" type="button">
+          <button class="account-card account-card--client account-card--large" data-view="onboard-client" data-stage="verify" data-new-account="true" type="button">
             <span class="account-card-label">Client account</span>
             <strong>Create a client profile</strong>
             <small>Post jobs, review helpers, and manage payments.</small>
           </button>
-          <button class="account-card account-card--worker account-card--large" data-view="onboard-worker" data-stage="verify" type="button">
+          <button class="account-card account-card--worker account-card--large" data-view="onboard-worker" data-stage="verify" data-new-account="true" type="button">
             <span class="account-card-label">Student account</span>
             <strong>Create a worker profile</strong>
             <small>Verify email, add parent access, and start applying.</small>
@@ -1315,7 +1814,7 @@ function renderClientVerificationScreen() {
             <p>We will send an 8 digit code to this email. Enter it here to prove the address is real.</p>
             <label>
               <span>Email</span>
-              <input type="email" name="email" value="${escapeHtml(client.email)}" maxlength="254" required />
+              <input type="email" name="email" value="${escapeHtml(client.email || "")}" maxlength="254" placeholder="name@example.com" required />
             </label>
             <div class="verification-row verification-row--stacked">
               <span class="verification-email">${escapeHtml(client.email || "Email needed first")}</span>
@@ -1373,7 +1872,7 @@ function renderClientDetailsForm() {
         <div class="form-grid onboarding-grid">
           <label>
             <span>Name</span>
-            <input type="text" name="name" maxlength="120" placeholder="Example: Maya" required />
+            <input type="text" name="name" value="${escapeHtml(client.name || "")}" maxlength="120" placeholder="Example: Maya" required />
           </label>
           <label>
             <span>Email</span>
@@ -1385,7 +1884,7 @@ function renderClientDetailsForm() {
           </label>
           <label>
             <span>Location</span>
-            <input type="text" name="location" value="${escapeHtml(client.location)}" maxlength="120" required />
+            <input type="text" name="location" value="${escapeHtml(client.location || "")}" maxlength="120" placeholder="Example: Maplewood" required />
           </label>
           <label>
             <span>What language do you speak?</span>
@@ -1393,15 +1892,15 @@ function renderClientDetailsForm() {
           </label>
           <label>
             <span>Preferred currency</span>
-            <select name="preferredCurrency" required>${currencyOptions(client.preferredCurrency || "USD")}</select>
+            <select name="preferredCurrency" required>${currencyOptions(client.preferredCurrency || "")}</select>
           </label>
           <label>
             <span>Create password</span>
-            <input type="password" name="password" maxlength="128" required />
+            <input type="password" name="password" maxlength="128" placeholder="Password" required />
           </label>
           <label>
             <span>Confirm password</span>
-            <input type="password" name="confirmPassword" maxlength="128" required />
+            <input type="password" name="confirmPassword" maxlength="128" placeholder="Password" required />
           </label>
         </div>
         <fieldset>
@@ -1426,7 +1925,6 @@ function renderWorkerVerificationScreen() {
   const emailVerificationSent = Boolean(worker.emailVerificationSentAt);
   const parentVerificationCode = worker.parentVerificationCode || "";
   const parentVerificationSent = Boolean(worker.parentVerificationSentAt);
-  const allVerified = Boolean(worker.emailVerifiedAt && worker.parentConfirmed);
 
   return `
     <section class="form-page">
@@ -1460,7 +1958,6 @@ function renderWorkerVerificationScreen() {
                 name="emailVerificationCode"
                 inputmode="numeric"
                 maxlength="8"
-                value="${escapeHtml(emailVerificationCode)}"
                 placeholder="Enter the 8 digit code"
                 ${emailVerificationSent ? "required" : ""}
               />
@@ -1492,7 +1989,6 @@ function renderWorkerVerificationScreen() {
                 name="parentVerificationCode"
                 inputmode="numeric"
                 maxlength="8"
-                value="${escapeHtml(parentVerificationCode)}"
                 placeholder="Enter the 8 digit code"
                 ${parentVerificationSent && worker.emailVerifiedAt ? "required" : ""}
                 ${worker.emailVerifiedAt ? "" : "disabled"}
@@ -1510,21 +2006,10 @@ function renderWorkerVerificationScreen() {
               Verify student email
             </button>
             <button class="ghost small" type="button" data-action="verify-parent-code" ${parentVerificationSent && worker.emailVerifiedAt ? "" : "disabled"}>
-              Verify parent code
-            </button>
-            <button class="primary" type="button" data-action="continue-worker-profile" ${allVerified ? "" : "disabled"}>
-              Continue to student profile
+              Verify parent email
             </button>
           </div>
         </form>
-        <aside class="trust-panel">
-          <h2>Parent access</h2>
-          <p>Once the parent email is verified, ParTime creates a parent account automatically so the parent can open the child view without another sign in.</p>
-          <div class="mini-metrics">
-            <span><strong>${Object.keys(state.parents).length}</strong> parent accounts</span>
-            <span><strong>${state.parentEvents.length}</strong> safety updates</span>
-          </div>
-        </aside>
       </div>
     </section>
   `;
@@ -1532,6 +2017,13 @@ function renderWorkerVerificationScreen() {
 
 function renderWorkerDetailsForm() {
   const worker = getWorker();
+  const emailVerificationCode = worker.emailVerificationCode || "";
+  const emailVerificationSent = Boolean(worker.emailVerificationSentAt);
+  const parentVerificationCode = worker.parentVerificationCode || "";
+  const parentVerificationSent = Boolean(worker.parentVerificationSentAt);
+  const services = Array.isArray(worker.services) ? worker.services : [];
+  const certifications = Array.isArray(worker.certifications) ? worker.certifications : [];
+
   return `
     <section class="form-page">
       <div class="page-heading-row">
@@ -1551,56 +2043,53 @@ function renderWorkerDetailsForm() {
               <input type="file" name="photo" id="photoInput" accept="image/*" />
             </label>
           </div>
-          <div class="form-grid onboarding-grid">
-            <label>
-              <span>Name</span>
-              <input type="text" name="name" maxlength="120" placeholder="Example: Maya" required />
-            </label>
-            <label>
-              <span>Email</span>
-              <input type="email" name="email" value="${escapeHtml(worker.email)}" readonly />
-            </label>
-            <label>
-              <span>Phone number</span>
-              <input type="tel" name="phone" value="${escapeHtml(worker.phone || "")}" maxlength="30" placeholder="Optional" />
-            </label>
-            <label>
-              <span>Age</span>
-              <input type="number" name="age" value="${escapeHtml(worker.age)}" min="13" required />
-            </label>
-            <label>
-              <span>Location</span>
-              <input type="text" name="location" value="${escapeHtml(worker.location)}" maxlength="120" required />
-            </label>
-            <label>
-              <span>School</span>
-              <input type="text" name="school" value="${escapeHtml(worker.school)}" maxlength="120" required />
-            </label>
-            <label>
-              <span>What language do you speak?</span>
-              <select name="language" required>${languageOptions(worker.language)}</select>
-            </label>
-            <label>
-              <span>Parent email</span>
-              <input type="email" name="parentEmail" value="${escapeHtml(worker.parentEmail)}" readonly />
-            </label>
-            <label>
-              <span>Create password</span>
-              <input type="password" name="password" maxlength="128" required />
-            </label>
-            <label>
-              <span>Confirm password</span>
-              <input type="password" name="confirmPassword" maxlength="128" required />
-            </label>
+          <div class="onboarding-section-stack">
+            <section class="onboarding-section">
+              <h3>Student account</h3>
+              <div class="form-grid onboarding-grid">
+                <label>
+                  <span>Name</span>
+                  <input type="text" name="name" value="${escapeHtml(worker.name || "")}" maxlength="120" placeholder="Example: Maya" required />
+                </label>
+                <label>
+                  <span>Phone number</span>
+                  <input type="tel" name="phone" value="${escapeHtml(worker.phone || "")}" maxlength="30" placeholder="Optional" />
+                </label>
+                <label>
+                  <span>Age</span>
+                  <input type="number" name="age" value="${escapeHtml(worker.age || "")}" min="13" max="17" placeholder="16" required />
+                </label>
+                <label>
+                  <span>Location</span>
+                  <input type="text" name="location" value="${escapeHtml(worker.location || "")}" maxlength="120" placeholder="Example: Maplewood" required />
+                </label>
+                <label>
+                  <span>School</span>
+                  <input type="text" name="school" value="${escapeHtml(worker.school || "")}" maxlength="120" placeholder="Example: Lincoln High School" required />
+                </label>
+                <label>
+                  <span>What language do you speak?</span>
+                  <select name="language" required>${languageOptions(worker.language)}</select>
+                </label>
+                <label>
+                  <span>Create password</span>
+                  <input type="password" name="password" maxlength="128" placeholder="Password" required />
+                </label>
+                <label>
+                  <span>Confirm password</span>
+                  <input type="password" name="confirmPassword" maxlength="128" placeholder="Password" required />
+                </label>
+              </div>
+            </section>
           </div>
         </div>
         <label>
           <span>Short bio</span>
-          <textarea name="bio" rows="4" maxlength="500" required>${escapeHtml(worker.bio)}</textarea>
+          <textarea name="bio" rows="4" maxlength="500" placeholder="Write a short bio" required>${escapeHtml(worker.bio || "")}</textarea>
         </label>
         <fieldset>
           <legend>Services offered</legend>
-          <div class="check-grid">${serviceCheckboxes(worker.services)}</div>
+          <div class="check-grid">${serviceCheckboxes(services)}</div>
         </fieldset>
         <div class="more-service-card">
           <h3>More service</h3>
@@ -1611,16 +2100,13 @@ function renderWorkerDetailsForm() {
               rows="3"
               maxlength="180"
               placeholder="Write another service, such as car washing or party setup"
-            >${escapeHtml(customServicesValue(worker.services))}</textarea>
+            >${escapeHtml(customServicesValue(services))}</textarea>
           </label>
         </div>
         <label>
           <span>Certifications and skills</span>
-          <input type="text" name="certifications" value="${escapeHtml(worker.certifications.join(", "))}" maxlength="300" required />
+          <input type="text" name="certifications" value="${escapeHtml(certifications.join(", "))}" maxlength="300" placeholder="Example: CPR, tutoring, community service" required />
         </label>
-        <div class="consent-banner">
-          Parent confirmation is required for student accounts. The linked parent view records the confirmation.
-        </div>
         <div class="form-actions">
           <button class="primary" type="submit">Save student profile</button>
         </div>
@@ -1636,7 +2122,7 @@ function renderClientDashboard() {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   const activeCount = clientJobs.filter((job) => job.status !== "Completed").length;
   const applicationCount = clientJobs.reduce((total, job) => total + job.applications.length, 0);
-  const totalPaid = formatTotals(totalsForJobs(clientJobs.filter((job) => job.status === "Completed")));
+  const requestInbox = clientJobs.filter((job) => job.applications.length);
 
   return `
     <section class="dashboard-shell">
@@ -1657,11 +2143,31 @@ function renderClientDashboard() {
           <span>Applications</span>
           <strong>${applicationCount}</strong>
         </article>
-        <article class="metric-card">
-          <span>Total paid</span>
-          <strong>${totalPaid}</strong>
-        </article>
       </div>
+
+      <section class="dashboard-section">
+        <div class="panel-heading">
+          <h2>Job requests inbox</h2>
+          <span>${requestInbox.length} jobs with requests</span>
+        </div>
+        <div class="timeline-list">
+          ${
+            requestInbox.length
+              ? requestInbox.map((job) => renderJobRequestSummary(job)).join("")
+              : renderEmpty("Requests from helpers will appear here as soon as they apply.")
+          }
+        </div>
+      </section>
+
+      <section class="dashboard-section">
+        <div class="panel-heading">
+          <h2>Active job posts</h2>
+          <span>${clientJobs.length} total</span>
+        </div>
+        <div class="job-list">
+          ${clientJobs.map(renderClientJobCard).join("") || renderEmpty("No jobs posted yet.")}
+        </div>
+      </section>
 
       <div class="two-column">
         <section class="panel">
@@ -1676,31 +2182,32 @@ function renderClientDashboard() {
             </label>
             <label class="themed-select-label">
               <span>Job type</span>
-              <select name="category" required>${categoryOptions("Lawn Care")}</select>
+              <select name="category" required>${categoryOptions("")}</select>
             </label>
             <div class="form-grid compact">
               <label>
                 <span>Date</span>
-                <input type="date" name="date" min="${TODAY}" value="2026-07-10" required />
+                <input type="date" name="date" min="${TODAY}" required />
               </label>
               <label>
                 <span>Pay type</span>
                 <select name="payType" required>
+                  <option value="">Choose a pay type</option>
                   <option value="Fixed">Fixed price</option>
                   <option value="Hourly">Hourly rate</option>
                 </select>
               </label>
               <label>
                 <span>Amount</span>
-                <input type="number" name="pay" min="0" step="0.01" value="40" required />
+                <input type="number" name="pay" min="0" step="0.01" placeholder="Amount" required />
               </label>
               <label>
                 <span>Currency</span>
-                <select name="currency" required>${currencyOptions(client.preferredCurrency || "USD")}</select>
+                <select name="currency" required>${currencyOptions("")}</select>
               </label>
               <label>
                 <span>Estimated hours</span>
-                <input type="number" name="estimatedHours" min="0.25" step="0.25" value="2" required />
+                <input type="number" name="estimatedHours" min="0.25" step="0.25" placeholder="Hours" required />
               </label>
             </div>
             <label class="negotiable-bubble">
@@ -1719,28 +2226,18 @@ function renderClientDashboard() {
           ${renderClientMatchSummary(clientJobs)}
         </section>
       </div>
-
-      <section class="dashboard-section">
-        <div class="panel-heading">
-          <h2>Active job posts</h2>
-          <span>${clientJobs.length} total</span>
-        </div>
-        <div class="job-list">
-          ${clientJobs.map(renderClientJobCard).join("") || renderEmpty("No jobs posted yet.")}
-        </div>
-      </section>
     </section>
   `;
 }
 
 function renderClientMatchSummary(clientJobs) {
-  const openJobs = clientJobs.filter((job) => job.status === "Open");
+  const openJobs = clientJobs.filter((job) => job.status === "Open" && job.applications.length);
   const matches = openJobs.flatMap((job) =>
     matchWorkers(job).map((match) => ({ ...match, jobTitle: job.title, category: job.category }))
   );
 
   if (!matches.length) {
-    return renderEmpty("Post an open job to see suggested students.");
+    return renderEmpty("Suggested students will appear after helpers request a job.");
   }
 
   return `
@@ -1761,6 +2258,27 @@ function renderClientMatchSummary(clientJobs) {
         )
         .join("")}
     </div>
+  `;
+}
+
+function renderJobRequestSummary(job) {
+  const acceptedWorker = job.acceptedWorkerId ? getWorker(job.acceptedWorkerId) : null;
+  const topMatch = bestMatchForJob(job);
+  const requestCount = job.applications.length;
+  return `
+    <article class="timeline-item">
+      <span class="timeline-dot ${statusClass(job.status)}"></span>
+      <div>
+        <strong>${escapeHtml(job.title)}</strong>
+        <span>${escapeHtml(job.category)}. ${formatDate(job.date)}. ${escapeHtml(paymentLabel(job))}</span>
+        <small>${requestCount} request${requestCount === 1 ? "" : "s"} · ${escapeHtml(topMatch)}</small>
+      </div>
+      ${
+        acceptedWorker
+          ? `<span class="pill">${escapeHtml(acceptedWorker.name)} accepted</span>`
+          : `<span class="pill">New requests</span>`
+      }
+    </article>
   `;
 }
 
@@ -1854,28 +2372,14 @@ function renderRatingPanel(job, worker) {
     return `
       <div class="rating-panel">
         <strong>Client rating</strong>
-        <span>${escapeHtml(starsText(existing.stars))} Rated ${existing.stars} / 5. Public profile: ${escapeHtml(ratingSummary(worker))}</span>
+        <span>${escapeHtml(starsText(existing.stars))} Rated ${existing.stars} / 5.</span>
+        ${existing.comment ? `<p>${escapeHtml(existing.comment)}</p>` : ""}
+        <small>Public profile: ${escapeHtml(ratingSummary(worker))}</small>
       </div>
     `;
   }
 
-  return `
-    <div class="rating-panel">
-      <strong>Rate this student</strong>
-      <span>Average rating becomes public after 5 ratings.</span>
-      <div class="star-row" aria-label="Rate student">
-        ${[1, 2, 3, 4, 5]
-          .map(
-            (stars) => `
-              <button class="star-button" data-action="rate-worker" data-job-id="${job.id}" data-worker-id="${worker.id}" data-stars="${stars}">
-                ${escapeHtml(starsText(stars))}
-              </button>
-            `
-          )
-          .join("")}
-      </div>
-    </div>
-  `;
+  return "";
 }
 
 function renderApplicationRow(job, application) {
@@ -2064,7 +2568,6 @@ function getFilteredFeedJobs(workerId) {
 function renderWorkerJobCard(job, worker) {
   const client = getClient(job.clientId);
   const application = job.applications.find((item) => item.workerId === worker.id);
-  const isSuggested = worker.services.includes(job.category) && worker.location === job.location;
   const hasConflict = !application && sameDayConflict(worker.id, job);
 
   return `
@@ -2083,7 +2586,6 @@ function renderWorkerJobCard(job, worker) {
         <strong class="pay">${escapeHtml(paymentLabel(job))}</strong>
       </div>
       <p class="muted">Posted by ${escapeHtml(client.name)}. ${job.applications.length} applicant${job.applications.length === 1 ? "" : "s"}.</p>
-      ${isSuggested ? `<span class="match-badge">Strong match</span>` : ""}
       ${hasConflict ? `<p class="conflict-note">Same-day conflict with another application.</p>` : ""}
       <div class="card-actions">
         ${
@@ -2150,6 +2652,10 @@ function renderParentMonitor() {
               <span class="profile-rating">${escapeHtml(ratingSummary(worker))}</span>
             </div>
           </div>
+          <div class="profile-section">
+            <h3>Public ratings and comments</h3>
+            ${renderPublicRatings(worker)}
+          </div>
         </section>
 
         <section class="panel">
@@ -2162,11 +2668,16 @@ function renderParentMonitor() {
               events
                 .map(
                   (event) => `
-                    <article class="event-item">
-                      <strong>${escapeHtml(event.type)}</strong>
-                      <span>${escapeHtml(event.message)}</span>
-                      <small>${dateTimeLabel(event.createdAt)}</small>
-                    </article>
+	                    <article class="event-item">
+	                      <strong>${escapeHtml(event.type)}</strong>
+	                      <span>${escapeHtml(event.message)}</span>
+	                      ${
+	                        event.emailTo
+	                          ? `<small>Email to ${escapeHtml(event.emailTo)} | ${escapeHtml(event.emailStatus || "Logged")}${event.emailSentAt ? ` | ${dateTimeLabel(event.emailSentAt)}` : ""}</small>`
+	                          : ""
+	                      }
+	                      <small>${dateTimeLabel(event.createdAt)}</small>
+	                    </article>
                   `
                 )
                 .join("") || renderEmpty("No parent updates yet.")
@@ -2235,6 +2746,154 @@ function renderAuthNotice() {
   return authNotice ? `<div class="notice-banner auth-banner">${escapeHtml(authNotice)}</div>` : "";
 }
 
+function notificationBellSvg() {
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 3a5 5 0 0 0-5 5v2.1c0 .8-.23 1.59-.66 2.26L5.1 13.72c-.58.92.07 2.08 1.16 2.08h11.48c1.09 0 1.74-1.16 1.16-2.08l-1.24-1.36A4.1 4.1 0 0 1 17 10.1V8a5 5 0 0 0-5-5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+      <path d="M10.1 18.1a2 2 0 0 0 3.8 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </svg>
+  `;
+}
+
+function passwordEyeSvg(isOpen = false) {
+  return isOpen
+    ? `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M3 12s3.8-6 9-6 9 6 9 6-3.8 6-9 6-9-6-9-6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        <circle cx="12" cy="12" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M4 20 20 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+    `
+    : `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M3 12s3.8-6 9-6 9 6 9 6-3.8 6-9 6-9-6-9-6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        <circle cx="12" cy="12" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      </svg>
+    `;
+}
+
+function renderNotificationsModal() {
+  const session = readSession();
+  if (!session || !notificationsModalOpen) return "";
+  const title = session.role === "worker" ? "Notifications for student" : session.role === "parent" ? "Parent notifications" : "Client notifications";
+  return `
+    <div class="modal-backdrop notification-backdrop" data-action="close-notifications">
+      <section class="notifications-modal" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+        <button class="modal-close" data-action="close-notifications" aria-label="Close notifications">x</button>
+        <div class="help-head">
+          <p class="eyebrow">Notifications</p>
+          <h2>${escapeHtml(title)}</h2>
+          <p class="muted">Major updates for your account appear here.</p>
+        </div>
+        ${renderNotificationList()}
+      </section>
+    </div>
+  `;
+}
+
+function renderChangePasswordModal() {
+  const session = readSession();
+  if (!session || !changePasswordModalOpen) return "";
+  const user = getSessionUser();
+  if (!user) return "";
+  return `
+    <div class="modal-backdrop" data-action="close-change-password">
+      <section class="password-modal" role="dialog" aria-modal="true" aria-label="Change password">
+        <button class="modal-close" data-action="close-change-password" aria-label="Close change password">x</button>
+        <div class="help-head">
+          <p class="eyebrow">Security</p>
+          <h2>Change password</h2>
+          <p class="muted">Enter your current password first, then choose a new one.</p>
+        </div>
+        <form class="stack-form" id="changePasswordForm">
+          <label>
+            <span>Old password</span>
+            <input type="password" name="oldPassword" maxlength="128" placeholder="Old password" required />
+          </label>
+          <label>
+            <span>New password</span>
+            <input type="password" name="newPassword" maxlength="128" placeholder="New password" required />
+          </label>
+          <label>
+            <span>Confirm new password</span>
+            <input type="password" name="confirmPassword" maxlength="128" placeholder="New password" required />
+          </label>
+          <button class="primary full" type="submit">Save password</button>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function renderRatingGateModal() {
+  const job = activeRatingJob();
+  if (!job || !ratingGateJobId) return "";
+  const worker = getWorker(job.acceptedWorkerId);
+  if (!worker) return "";
+  const selectedRating = Math.max(0, Math.min(5, ratingGateStars));
+  return `
+    <div class="modal-backdrop rating-backdrop">
+      <section class="rating-gate-modal" role="dialog" aria-modal="true" aria-label="Rate worker">
+        <div class="help-head">
+          <p class="eyebrow">Final step</p>
+          <h2>Rate ${escapeHtml(worker.name)}</h2>
+          <p class="muted">You must submit a star rating before leaving this screen.</p>
+        </div>
+        <div class="rating-gate-summary">
+          <strong>${escapeHtml(job.title)}</strong>
+          <span>${escapeHtml(paymentLabel(job))}</span>
+        </div>
+        <div class="star-row rating-star-row" aria-label="Choose a star rating">
+          ${[1, 2, 3, 4, 5]
+            .map(
+              (stars) => `
+                <button class="star-button ${selectedRating >= stars ? "is-selected" : ""}" type="button" data-action="set-rating-stars" data-stars="${stars}">
+                  ${escapeHtml(starsText(stars))}
+                </button>
+              `
+            )
+            .join("")}
+        </div>
+        <label>
+          <span>Comment about the work</span>
+          <textarea name="ratingComment" rows="4" maxlength="500" placeholder="Share what went well or what could be better">${escapeHtml(ratingGateComment)}</textarea>
+        </label>
+        <button class="primary full" type="button" data-action="submit-rating-gate" ${selectedRating ? "" : "disabled"}>Submit rating</button>
+      </section>
+    </div>
+  `;
+}
+
+function bindPasswordVisibility() {
+  document.querySelectorAll("input[type='password']").forEach((input) => {
+    if (input.closest(".password-field")) return;
+    const wrapper = document.createElement("span");
+    wrapper.className = "password-field";
+    input.parentNode.insertBefore(wrapper, input);
+    wrapper.appendChild(input);
+
+    const button = document.createElement("button");
+    button.className = "password-visibility";
+    button.type = "button";
+    button.innerHTML = passwordEyeSvg(false);
+    button.setAttribute("aria-label", "See password");
+    button.setAttribute("aria-pressed", "false");
+    wrapper.appendChild(button);
+  });
+
+  document.querySelectorAll(".password-visibility").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = button.closest(".password-field")?.querySelector("input");
+      if (!input) return;
+      const showing = input.type === "text";
+      input.type = showing ? "password" : "text";
+      button.innerHTML = passwordEyeSvg(showing);
+      button.setAttribute("aria-label", showing ? "See password" : "Hide password");
+      button.setAttribute("aria-pressed", String(!showing));
+    });
+  });
+}
+
 function verificationLink(viewName, accountId, code) {
   const url = new URL(window.location.href);
   url.searchParams.set("verify", viewName);
@@ -2244,14 +2903,64 @@ function verificationLink(viewName, accountId, code) {
 }
 
 function bindCommonEvents() {
+  hydrateReviewSection();
+  const reviewForm = document.querySelector("#reviewForm");
+  if (reviewForm) {
+    reviewForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const session = readSession();
+      const user = getSessionUser();
+      if (!session || !user) {
+        navigate("login");
+        return;
+      }
+      const formData = new FormData(reviewForm);
+      const stars = Math.max(1, Math.min(5, Number(formData.get("stars")) || 5));
+      const comment = String(formData.get("comment") || "").trim();
+      if (!Array.isArray(state.appReviews)) state.appReviews = [];
+      state.appReviews.unshift({
+        id: `review-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+        name: user.name || "Anonymous",
+        role: session.role || "user",
+        stars,
+        comment,
+        createdAt: new Date().toISOString()
+      });
+      await saveState();
+      navigate("landing");
+    });
+  }
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", () => {
       const next = button.dataset.view;
       const meta = {};
       if (button.dataset.role) meta.role = button.dataset.role;
       if (button.dataset.stage) meta.stage = button.dataset.stage;
+      if (button.dataset.newAccount === "true") {
+        clearSession();
+        if (next === "onboard-client") meta.id = createBlankClientDraft();
+        if (next === "onboard-worker") {
+          meta.id = createBlankWorkerDraft();
+          meta.stage = "details";
+        }
+      }
       if (!meta.stage && String(next || "").startsWith("onboard-")) meta.stage = "verify";
       navigate(next, meta);
+    });
+  });
+
+  bindPasswordVisibility();
+
+  document.querySelectorAll("[data-action='toggle-field-info']").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const labelInfo = button.closest(".label-with-info")?.nextElementSibling;
+      const containerInfo = button.closest("label, fieldset")?.querySelector(".field-info-text");
+      const info = labelInfo?.classList?.contains("field-info-text") ? labelInfo : containerInfo;
+      if (!info) return;
+      info.hidden = !info.hidden;
+      button.setAttribute("aria-expanded", String(!info.hidden));
     });
   });
 
@@ -2268,6 +2977,72 @@ function bindCommonEvents() {
       event.stopPropagation();
       brandMenuOpen = false;
       settingsModalOpen = true;
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-action='open-my-profile']").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const session = readSession();
+      brandMenuOpen = false;
+      if (session?.role === "worker") {
+        profileModalWorkerId = session.id;
+      } else {
+        settingsModalOpen = true;
+      }
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-action='open-help']").forEach((button) => {
+    button.addEventListener("click", () => {
+      brandMenuOpen = false;
+      helpModalOpen = true;
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-action='open-notifications']").forEach((button) => {
+    button.addEventListener("click", () => {
+      brandMenuOpen = false;
+      notificationsModalOpen = true;
+      markNotificationsRead();
+      saveState();
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-action='close-notifications']").forEach((element) => {
+    element.addEventListener("click", (event) => {
+      if (event.target !== element && !element.classList.contains("modal-close")) return;
+      notificationsModalOpen = false;
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-action='open-change-password']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const session = readSession();
+      if (!session) return;
+      brandMenuOpen = false;
+      changePasswordModalOpen = true;
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-action='close-change-password']").forEach((element) => {
+    element.addEventListener("click", (event) => {
+      if (event.target !== element && !element.classList.contains("modal-close")) return;
+      changePasswordModalOpen = false;
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-action='close-help']").forEach((element) => {
+    element.addEventListener("click", (event) => {
+      if (event.target !== element && !element.classList.contains("modal-close")) return;
+      helpModalOpen = false;
       render();
     });
   });
@@ -2293,6 +3068,9 @@ function bindCommonEvents() {
       clearSession();
       helperNotice = "";
       settingsModalOpen = false;
+      helpModalOpen = false;
+      notificationsModalOpen = false;
+      changePasswordModalOpen = false;
       navigate("login", { role: "client" });
     });
   });
@@ -2313,6 +3091,7 @@ function bindCommonEvents() {
         clearSession();
         helperNotice = "";
         settingsModalOpen = false;
+        helpModalOpen = false;
         navigate("login", { role: "client" });
         return;
       }
@@ -2347,20 +3126,6 @@ function bindSettingsModal() {
 
     const role = session.role || user.role || "client";
     const formData = new FormData(form);
-    const password = String(formData.get("password") || "").trim();
-    const confirmPassword = String(formData.get("confirmPassword") || "").trim();
-
-    if (password || confirmPassword) {
-      if (password.length < 8) {
-        showFormError(form, "Please make your new password at least 8 characters long.");
-        return;
-      }
-      if (password !== confirmPassword) {
-        showFormError(form, "Your password entries do not match.");
-        return;
-      }
-      Object.assign(user, passwordRecord(password));
-    }
 
     user.name = String(formData.get("name") || "").trim();
     user.phone = String(formData.get("phone") || "").trim();
@@ -2407,6 +3172,48 @@ function bindSettingsModal() {
   });
 }
 
+function bindChangePasswordModal() {
+  const form = document.querySelector("#changePasswordForm");
+  if (!form) return;
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const user = getSessionUser();
+    if (!user) return;
+
+    const formData = new FormData(form);
+    const oldPassword = String(formData.get("oldPassword") || "").trim();
+    const newPassword = String(formData.get("newPassword") || "").trim();
+    const confirmPassword = String(formData.get("confirmPassword") || "").trim();
+
+    if (!user.passwordHash) {
+      showFormError(form, "This account does not have a saved password yet.");
+      return;
+    }
+
+    if (hashPassword(oldPassword, user.passwordSalt || "") !== user.passwordHash) {
+      showFormError(form, "The old password does not match.");
+      return;
+    }
+
+    if (newPassword.length < 8) {
+      showFormError(form, "Please make your new password at least 8 characters long.");
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      showFormError(form, "Your new passwords do not match.");
+      return;
+    }
+
+    Object.assign(user, passwordRecord(newPassword));
+    changePasswordModalOpen = false;
+    showAuthNotice("Password updated.");
+    await saveState();
+    render();
+  });
+}
+
 function bindViewEvents() {
   if (view === "login") bindLogin();
   if (view === "onboard-client") bindClientOnboarding();
@@ -2414,6 +3221,7 @@ function bindViewEvents() {
   if (view === "client-dashboard") bindClientDashboard();
   if (view === "worker-dashboard") bindWorkerDashboard();
   bindSettingsModal();
+  bindChangePasswordModal();
 }
 
 function bindLogin() {
@@ -2454,7 +3262,6 @@ function bindLogin() {
       return;
     }
 
-    writeRememberedLogin(email, password);
     writeSession({ role, id: user.id });
     if (role === "worker") navigate("worker-dashboard");
     else if (role === "parent") navigate("parent-monitor");
@@ -2475,7 +3282,7 @@ function bindClientOnboarding() {
       client.emailVerificationSentAt = "";
       client.emailVerifiedAt = "";
     }
-    client.email = nextEmail || client.email;
+    client.email = nextEmail;
     if (stage === "details") {
       client.name = String(formData.get("name") || "").trim();
       client.phone = String(formData.get("phone") || "").trim();
@@ -2611,7 +3418,6 @@ function bindClientOnboarding() {
     }
 
     Object.assign(draft, passwordRecord(password));
-    writeRememberedLogin(draft.email, password);
     saveOnboardingDraft("onboard-client", "details", draft.id);
     saveState();
     clearSession();
@@ -2626,23 +3432,25 @@ function bindWorkerOnboarding() {
   const form = document.querySelector("#workerOnboardingForm");
   if (!form) return;
   const stage = routeMeta.stage || "verify";
+  const isDetailsStage = stage === "details";
   const photoInput = document.querySelector("#photoInput");
   const preview = document.querySelector(".photo-uploader img");
   const worker = getWorker();
 
   const syncDraftWorker = (formData) => {
-    const nextEmail = normalizeEmail(formData.get("email"));
-    const nextParentEmail = normalizeEmail(formData.get("parentEmail"));
+    const nextEmail = formData.has("email") ? normalizeEmail(formData.get("email")) : worker.email;
+    const nextParentEmail = formData.has("parentEmail") ? normalizeEmail(formData.get("parentEmail")) : worker.parentEmail;
     if (worker.email !== nextEmail) {
       worker.emailVerificationCode = "";
       worker.emailVerificationSentAt = "";
       worker.emailVerifiedAt = "";
     }
-    worker.email = nextEmail || worker.email;
-    if (stage === "details") {
+    worker.email = nextEmail;
+    if (isDetailsStage) {
       worker.name = String(formData.get("name") || "").trim();
       worker.phone = String(formData.get("phone") || "").trim();
-      worker.age = Number(formData.get("age"));
+      const nextAge = String(formData.get("age") || "").trim();
+      worker.age = nextAge ? Number(nextAge) : "";
       worker.location = String(formData.get("location") || "").trim();
       worker.school = String(formData.get("school") || "").trim();
       worker.language = formData.get("language");
@@ -2650,15 +3458,13 @@ function bindWorkerOnboarding() {
       worker.services = formData
         .getAll("services")
         .concat(
-          formData
-            .get("customService")
+          String(formData.get("customService") || "")
             .split(/[,\n]/)
             .map((item) => item.trim())
             .filter(Boolean)
         )
         .filter((item, index, list) => list.indexOf(item) === index);
-      worker.certifications = formData
-        .get("certifications")
+      worker.certifications = String(formData.get("certifications") || "")
         .split(",")
         .map((item) => item.trim())
         .filter(Boolean);
@@ -2669,7 +3475,7 @@ function bindWorkerOnboarding() {
       worker.parentVerifiedAt = "";
       worker.parentConfirmed = false;
     }
-    worker.parentEmail = nextParentEmail || worker.parentEmail;
+    worker.parentEmail = nextParentEmail;
     return worker;
   };
 
@@ -2807,7 +3613,7 @@ function bindWorkerOnboarding() {
   const verifyParentCodeButton = document.querySelector("[data-action='verify-parent-code']");
   if (verifyParentCodeButton) verifyParentCodeButton.addEventListener("click", verifyParentCode);
 
-  if (stage !== "details") return;
+  if (!isDetailsStage) return;
 
   if (photoInput && preview) {
     photoInput.addEventListener("change", () => {
@@ -2866,7 +3672,6 @@ function bindWorkerOnboarding() {
     const commitWorker = (photo) => {
       Object.assign(draft, passwordRecord(password));
       if (photo) draft.photo = photo;
-      writeRememberedLogin(draft.email, password);
       draft.parentVerificationCode = "";
       draft.parentVerificationSentAt = draft.parentVerificationSentAt || new Date().toISOString();
       draft.parentVerifiedAt = draft.parentVerifiedAt || new Date().toISOString();
@@ -2892,7 +3697,14 @@ function bindWorkerOnboarding() {
 function showFormError(form, message) {
   const existing = form.querySelector(".form-error");
   if (existing) existing.remove();
-  form.insertAdjacentHTML("afterbegin", `<div class="form-error">${escapeHtml(message)}</div>`);
+  form.insertAdjacentHTML("afterbegin", `<div class="form-error" role="alert" tabindex="-1">${escapeHtml(message)}</div>`);
+  const error = form.querySelector(".form-error");
+  window.requestAnimationFrame(() => {
+    const revealError = () => error?.scrollIntoView({ behavior: "smooth", block: "center" });
+    revealError();
+    error?.focus({ preventScroll: true });
+    window.setTimeout(revealError, 150);
+  });
 }
 
 function resolveRoleForUser(user) {
@@ -2921,9 +3733,9 @@ function isEmailAvailableForParent(email, ignoreId = "") {
 
 function verificationStateMessage(record, code, label = "Email") {
   if (record.emailVerifiedAt) return `${label} already verified.`;
-  if (!record.emailVerificationCode) return `Send the ${label.toLowerCase()} verification link first.`;
-  if (isVerificationExpired(record.emailVerificationSentAt)) return "Expired email verification link.";
-  if (normalizeEmail(code) !== normalizeEmail(record.emailVerificationCode)) return `${label} verification link is invalid or has already been used.`;
+  if (!record.emailVerificationCode) return `Send the ${label.toLowerCase()} verification code first.`;
+  if (isVerificationExpired(record.emailVerificationSentAt)) return "Expired email verification code.";
+  if (normalizeEmail(code) !== normalizeEmail(record.emailVerificationCode)) return `${label} verification code is invalid or has already been used.`;
   return "";
 }
 
@@ -2945,7 +3757,7 @@ function handleVerificationLinkFromUrl() {
   if (verify === "client-email") {
     const client = state.clients[id];
     if (!client) {
-      showAuthNotice("This verification link no longer exists.");
+      showAuthNotice("This verification code no longer exists.");
       clearUrl();
       return true;
     }
@@ -2972,7 +3784,7 @@ function handleVerificationLinkFromUrl() {
   if (verify === "worker-email") {
     const worker = state.workers[id];
     if (!worker) {
-      showAuthNotice("This verification link no longer exists.");
+      showAuthNotice("This verification code no longer exists.");
       clearUrl();
       return true;
     }
@@ -2999,12 +3811,21 @@ function handleVerificationLinkFromUrl() {
   if (verify === "worker-parent") {
     const worker = state.workers[id];
     if (!worker) {
-      showAuthNotice("This verification link no longer exists.");
+      showAuthNotice("This verification code no longer exists.");
       clearUrl();
       return true;
     }
     state.selectedWorkerId = worker.id;
-    const message = verificationStateMessage(worker, code, "Parent");
+    const message = verificationStateMessage(
+      {
+        ...worker,
+        emailVerificationCode: worker.parentVerificationCode,
+        emailVerificationSentAt: worker.parentVerificationSentAt,
+        emailVerifiedAt: worker.parentVerifiedAt
+      },
+      code,
+      "Parent"
+    );
     if (message) {
       showAuthNotice(message);
       view = "onboard-worker";
@@ -3066,7 +3887,12 @@ function bindClientDashboard() {
         status: application.workerId === worker.id ? "Accepted" : "Not selected",
         acceptedAt: application.workerId === worker.id ? new Date().toISOString() : application.acceptedAt
       }));
-      addParentEvent(worker.id, "Job accepted", `${worker.name} was accepted for ${job.title}.`);
+      const client = getClient(job.clientId);
+      pushNotification("worker", worker.id, "Job accepted", `${job.title} was accepted by ${client.name}.`, {
+        jobId: job.id,
+        clientId: job.clientId
+      });
+      addParentEvent(worker.id, "Job accepted", `${worker.name} was accepted for ${job.title}. The job is now in progress.`);
       saveState();
       render();
     });
@@ -3075,29 +3901,56 @@ function bindClientDashboard() {
   document.querySelectorAll("[data-action='complete-job']").forEach((button) => {
     button.addEventListener("click", () => {
       const job = state.jobs.find((item) => item.id === button.dataset.jobId);
-      const worker = getWorker(job.acceptedWorkerId);
-      job.status = "Completed";
-      job.completedAt = new Date().toISOString();
-      addParentEvent(worker.id, "Completion approved", `${worker.name} completed ${job.title} and earned ${formatMoney(jobTotal(job), job.currency)}.`);
-      saveState();
+      if (!job) return;
+      openRatingGate(job.id);
       render();
     });
   });
 
-  document.querySelectorAll("[data-action='rate-worker']").forEach((button) => {
+  document.querySelectorAll("[data-action='set-rating-stars']").forEach((button) => {
     button.addEventListener("click", () => {
-      const job = state.jobs.find((item) => item.id === button.dataset.jobId);
-      const worker = getWorker(button.dataset.workerId);
+      ratingGateStars = Number(button.dataset.stars || 0);
+      render();
+    });
+  });
+
+  const ratingComment = document.querySelector("[name='ratingComment']");
+  if (ratingComment) {
+    ratingComment.addEventListener("input", (event) => {
+      ratingGateComment = event.target.value;
+    });
+  }
+
+  document.querySelectorAll("[data-action='submit-rating-gate']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const job = activeRatingJob();
+      if (!job || !ratingGateStars) return;
+      const worker = getWorker(job.acceptedWorkerId);
+      if (!worker) return;
       worker.ratings = worker.ratings || [];
       const alreadyRated = worker.ratings.some((rating) => rating.jobId === job.id && rating.clientId === job.clientId);
-      if (alreadyRated) return;
-      worker.ratings.push({
-        jobId: job.id,
-        clientId: job.clientId,
-        stars: Number(button.dataset.stars),
-        createdAt: new Date().toISOString()
-      });
+      if (!alreadyRated) {
+        worker.ratings.push({
+          jobId: job.id,
+          clientId: job.clientId,
+          stars: ratingGateStars,
+          comment: String(ratingGateComment || "").trim(),
+          createdAt: new Date().toISOString()
+        });
+      }
       job.ratingSubmitted = true;
+      job.status = "Completed";
+      job.completedAt = new Date().toISOString();
+      const client = getClient(job.clientId);
+      const ratingText = `${starsText(ratingGateStars)} Rated ${ratingGateStars} / 5.`;
+      const commentText = String(ratingGateComment || "").trim();
+      pushNotification("worker", worker.id, "Rating received", commentText ? `${job.title}: ${ratingText} Comment: ${commentText}` : `${job.title}: ${ratingText}`);
+      addParentEvent(
+        worker.id,
+        "Completion approved",
+        `${worker.name} completed ${job.title} and earned ${formatMoney(jobTotal(job), job.currency)}.${ratingGateStars ? ` Rating: ${ratingGateStars} / 5.` : ""}${commentText ? ` Comment: ${commentText}` : ""}`
+      );
+      openRatingGate("");
       saveState();
       render();
     });
@@ -3114,6 +3967,11 @@ function bindClientDashboard() {
         jobId: job.id,
         createdAt: new Date().toISOString()
       });
+      pushNotification("worker", worker.id, "Next Time", `${getClient(job.clientId).name} wants to revisit ${job.title} later.`, {
+        jobId: job.id,
+        clientId: job.clientId
+      });
+      addParentEvent(worker.id, "Next Timed", `${getClient(job.clientId).name} marked ${worker.name} for a possible future job after ${job.title}.`);
       saveState();
       render();
     });
@@ -3160,7 +4018,13 @@ function bindWorkerDashboard() {
         status: "Applied",
         appliedAt: new Date().toISOString()
       });
-      addParentEvent(worker.id, "Application sent", `${worker.name} applied for ${job.title}.`);
+      const suggestedMatch = bestMatchForJob(job);
+      pushNotification("client", job.clientId, "New job request", `${worker.name} requested ${job.title}.`, {
+        jobId: job.id,
+        workerId: worker.id,
+        suggestedMatch
+      });
+      addParentEvent(worker.id, "Job requested", `${worker.name} requested ${job.title} from ${getClient(job.clientId).name}.`);
       saveState();
       render();
     });
@@ -3186,6 +4050,7 @@ async function bootstrap() {
   })();
 
   state = remoteState || loadLocalState() || createDefaultState();
+  clearRememberedLogin();
   handleVerificationLinkFromUrl();
   const session = readSession();
   if (session) {
