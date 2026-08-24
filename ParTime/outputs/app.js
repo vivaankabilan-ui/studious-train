@@ -130,6 +130,14 @@ function readSession() {
   }
 }
 
+function getSessionUser() {
+  const session = readSession();
+  if (!session) return null;
+  if (session.role === "worker") return state.workers[session.id] || null;
+  if (session.role === "parent") return state.parents[session.id] || null;
+  return state.clients[session.id] || null;
+}
+
 function writeSession(session) {
   try {
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
@@ -438,7 +446,8 @@ function createDefaultState() {
         message: "Maya applied for Plant balcony herbs.",
         createdAt: "2026-07-01T18:05:00"
       }
-    ]
+    ],
+    appReviews: []
   };
 }
 
@@ -936,6 +945,7 @@ function renderHeader() {
         ${logoMenuOpen ? `
           <div class="logo-menu" role="menu" aria-label="ParTime menu">
             <button class="logo-menu-item" type="button" data-view="landing">Home page</button>
+            <button class="logo-menu-item" type="button" data-view="review">Review</button>
             ${session
               ? `
                 <button class="logo-menu-item" type="button" data-action="logout">Sign out</button>
@@ -965,7 +975,106 @@ function renderView() {
   if (view === "worker-dashboard") return renderWorkerDashboard();
   if (view === "parent-monitor") return renderParentMonitor();
   if (view === "settings") return renderSettings();
+  if (view === "review") return renderReviewPage();
   return renderLanding();
+}
+
+function reviewFallbacks() {
+  return [
+    {
+      id: "seed-review-1",
+      name: "Jordan",
+      role: "client",
+      stars: 5,
+      comment: "The app felt really easy to use, and I liked being able to see everything in one place.",
+      createdAt: "2026-07-01T12:00:00.000Z"
+    },
+    {
+      id: "seed-review-2",
+      name: "Maya",
+      role: "student",
+      stars: 5,
+      comment: "I could apply fast, and the notifications made it simple to keep track of what was happening.",
+      createdAt: "2026-07-02T12:00:00.000Z"
+    },
+    {
+      id: "seed-review-3",
+      name: "Ana",
+      role: "parent",
+      stars: 4,
+      comment: "It feels trustworthy and clear. The parent view makes the whole setup a lot more comfortable.",
+      createdAt: "2026-07-03T12:00:00.000Z"
+    }
+  ];
+}
+
+function appReviewsForDisplay(limit = 3) {
+  const reviews = [...reviewFallbacks(), ...(Array.isArray(state.appReviews) ? state.appReviews : [])]
+    .sort((a, b) => {
+      const starsDiff = (Number(b.stars) || 0) - (Number(a.stars) || 0);
+      if (starsDiff !== 0) return starsDiff;
+      return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+    });
+  const seen = new Set();
+  return reviews
+    .filter((review) => {
+      const key = review.id || `${review.name}-${review.comment}-${review.createdAt}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
+}
+
+function renderAppReviewCard(review) {
+  const stars = Math.max(1, Math.min(5, Number(review.stars) || 5));
+  return `
+    <article class="review-card">
+      <div class="review-stars" aria-label="${stars} star rating">${"★".repeat(stars)}${"☆".repeat(5 - stars)}</div>
+      <p>“${escapeHtml(review.comment || "No comment left.")}”</p>
+      <strong>${escapeHtml(review.name || "Anonymous")}${review.role ? `, ${escapeHtml(review.role)}` : ""}</strong>
+    </article>
+  `;
+}
+
+function renderReviewPage() {
+  const session = readSession();
+  const user = getSessionUser();
+  const lockedOut = !session || !user;
+  const starsOptions = [1, 2, 3, 4, 5].map((value) => `<option value="${value}">${"★".repeat(value)}</option>`).join("");
+
+  return `
+    <section class="auth-layout auth-layout--single">
+      <div class="auth-panel">
+        <p class="eyebrow">Review</p>
+        <h1>Leave a review</h1>
+        <p class="muted">Pick a star rating and add a short comment if you want.</p>
+        ${lockedOut
+          ? `
+            <div class="panel">
+              Sign in first so your review is tied to your account.
+            </div>
+          `
+          : `
+            <form class="stack-form review-form" id="reviewForm">
+              <label>
+                <span>Star rating</span>
+                <select name="stars" required>
+                  ${starsOptions}
+                </select>
+              </label>
+              <label>
+                <span>Comment</span>
+                <textarea name="comment" rows="5" maxlength="500" placeholder="Optional comment about the experience"></textarea>
+              </label>
+              <button class="primary full" type="submit">Save review</button>
+              <button class="text-link" type="button" data-view="landing">Back</button>
+            </form>
+          `
+        }
+      </div>
+    </section>
+  `;
 }
 
 function renderSettings() {
@@ -1098,21 +1207,7 @@ function renderLanding() {
         <h2>What people say about ParTime</h2>
       </div>
       <div class="review-grid">
-        <article class="review-card">
-          <div class="review-stars" aria-label="5 star rating">★★★★★</div>
-          <p>“The app felt really easy to use, and I liked being able to see everything in one place.”</p>
-          <strong>Jordan, client</strong>
-        </article>
-        <article class="review-card">
-          <div class="review-stars" aria-label="5 star rating">★★★★★</div>
-          <p>“I could apply fast, and the notifications made it simple to keep track of what was happening.”</p>
-          <strong>Maya, student</strong>
-        </article>
-        <article class="review-card">
-          <div class="review-stars" aria-label="4 star rating">★★★★☆</div>
-          <p>“It feels trustworthy and clear. The parent view makes the whole setup a lot more comfortable.”</p>
-          <strong>Ana, parent</strong>
-        </article>
+        ${appReviewsForDisplay().map(renderAppReviewCard).join("")}
       </div>
     </section>
 
@@ -2098,6 +2193,33 @@ function renderEmpty(message) {
 }
 
 function bindCommonEvents() {
+  const reviewForm = document.querySelector("#reviewForm");
+  if (reviewForm) {
+    reviewForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const session = readSession();
+      const user = getSessionUser();
+      if (!session || !user) {
+        navigate("login");
+        return;
+      }
+      const formData = new FormData(reviewForm);
+      const stars = Math.max(1, Math.min(5, Number(formData.get("stars")) || 5));
+      const comment = String(formData.get("comment") || "").trim();
+      if (!Array.isArray(state.appReviews)) state.appReviews = [];
+      state.appReviews.unshift({
+        id: `review-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+        name: user.name || "Anonymous",
+        role: session.role || "user",
+        stars,
+        comment,
+        createdAt: new Date().toISOString()
+      });
+      await saveState();
+      navigate("landing");
+    });
+  }
+
   document.querySelectorAll("[data-action='toggle-logo-menu']").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
