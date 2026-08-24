@@ -958,8 +958,8 @@ function renderHeader() {
         ` : ""}
       </div>
       <div class="header-actions">
-        <button class="ghost small" data-view="client-dashboard">Client profile</button>
-        <button class="ghost small" data-view="worker-dashboard">Student profile</button>
+        <button class="ghost small" data-action="test-login-client">Client profile</button>
+        <button class="ghost small" data-action="test-login-worker">Student profile</button>
         ${session ? `<button class="nav-link logout-link" data-action="logout">Log out</button>` : ""}
       </div>
     </header>
@@ -2247,6 +2247,28 @@ function bindCommonEvents() {
       clientNotificationsOpen = false;
       logoMenuOpen = false;
       render();
+    });
+  });
+
+  document.querySelectorAll("[data-action='test-login-client']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const clientId = state.selectedClientId || Object.keys(state.clients)[0] || "c1";
+      if (state.clients[clientId]) {
+        writeSession({ role: "client", id: clientId });
+        helperNotice = "";
+        navigate("client-dashboard");
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-action='test-login-worker']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const workerId = state.selectedWorkerId || Object.keys(state.workers)[0] || "w1";
+      if (state.workers[workerId]) {
+        writeSession({ role: "worker", id: workerId });
+        helperNotice = "";
+        navigate("worker-dashboard");
+      }
     });
   });
 
