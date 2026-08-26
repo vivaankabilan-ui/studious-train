@@ -2,6 +2,6 @@
   "name": "partime",
   "private": true,
   "scripts": {
-    "build": "node -e \"process.exit(0)\""
+    "build": "rm -rf dist && mkdir -p dist && cp -R outputs/. dist/"
   }
 }
