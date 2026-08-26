@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/wrangler",
+  "name": "partime",
+  "pages_build_output_dir": "./outputs",
+  "compatibility_date": "2026-07-07",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "partime",
+      "database_id": "3041170a-a9bf-4d8b-9080-c189d113857b"
+    }
+  ]
+}
