@@ -2,6 +2,6 @@
   "name": "partime",
   "private": true,
   "scripts": {
-    "build": "rm -rf dist && mkdir -p dist/server dist/.openai dist/_appgen_meta && cp -R outputs/. dist/ && cp .openai/hosting.json dist/.openai/hosting.json && printf 'export default {};\\n' > dist/server/index.js && printf '{}\\n' > dist/_appgen_meta/appgarden.json"
+    "build": "rm -rf dist && mkdir -p dist/server dist/.openai dist/_appgen_meta && cp -R outputs/. dist/ && cp .openai/hosting.json dist/.openai/hosting.json && cat > dist/server/index.js <<'EOF'\nexport default {\n  async fetch(request, env) {\n    if (env && env.ASSETS && typeof env.ASSETS.fetch === 'function') {\n      return env.ASSETS.fetch(request);\n    }\n    return new Response('', { status: 204 });\n  }\n};\nEOF\nprintf '{}\\n' > dist/_appgen_meta/appgarden.json"
   }
 }
