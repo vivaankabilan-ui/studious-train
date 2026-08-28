@@ -1160,6 +1160,7 @@ function pathForView(nextView, meta = {}) {
   if (nextView === "notifications") return "/notifications";
   if (nextView === "client-dashboard") return "/client";
   if (nextView === "worker-dashboard") return "/student";
+  if (nextView === "forgot-password") return "/forgot-password";
   if (nextView === "settings") return "/settings";
   if (nextView === "login") return "/login";
   if (nextView === "create-account") return "/create-account";
@@ -1176,6 +1177,7 @@ function routeFromLocation() {
   if (pathname === "/notifications") return { view: "notifications", meta: {} };
   if (pathname === "/client") return { view: "client-dashboard", meta: {} };
   if (pathname === "/student") return { view: "worker-dashboard", meta: {} };
+  if (pathname === "/forgot-password") return { view: "forgot-password", meta: {} };
   if (pathname === "/settings") return { view: "settings", meta: {} };
   if (pathname === "/login") return { view: "login", meta: {} };
   if (pathname === "/create-account") return { view: "create-account", meta: {} };
@@ -1294,6 +1296,7 @@ function renderHeader() {
 
 function renderView() {
   if (view === "login") return renderLogin();
+  if (view === "forgot-password") return renderForgotPassword();
   if (view === "create-account") return renderCreateAccount();
   if (view === "onboard-client") return renderClientOnboarding();
   if (view === "onboard-worker") return renderWorkerOnboarding();
@@ -1604,15 +1607,10 @@ function renderLanding() {
 function renderLogin() {
   return `
     <section class="auth-layout auth-layout--single auth-layout--login">
-      <div class="auth-panel auth-panel--feature">
+      <div class="auth-panel auth-panel--login">
         <p class="eyebrow">Secure access</p>
         <h1>Sign in</h1>
         <p class="muted">Use the same sign-in screen for every account and pick up right where you left off.</p>
-        <div class="auth-chip-row" aria-hidden="true">
-          <span class="pill tiny">One login</span>
-          <span class="pill tiny">Fast return</span>
-          <span class="pill tiny">Friendly access</span>
-        </div>
         <form class="stack-form" id="loginForm">
           <label>
             <span>Email</span>
@@ -1624,15 +1622,45 @@ function renderLogin() {
           </label>
           <button class="primary full" type="submit">Submit</button>
         </form>
-        <div class="auth-note-grid">
-          <div class="auth-note-card">
-            <strong>Friendly setup</strong>
-            <span>Students and clients all use the same clean sign-in flow.</span>
-          </div>
-          <div class="auth-note-card">
-            <strong>Safe by design</strong>
-            <span>Account checks and access rules stay built into the app journey.</span>
-          </div>
+        <div class="auth-action-stack">
+          <button class="secondary full" type="button" data-view="create-account">Create account</button>
+          <button class="text-link auth-forgot-link" type="button" data-view="forgot-password">Forgot password?</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderForgotPassword() {
+  const resetEmail = routeMeta.email || "";
+  return `
+    <section class="auth-layout auth-layout--single auth-layout--login">
+      <div class="auth-panel auth-panel--login">
+        <p class="eyebrow">Secure access</p>
+        <h1>Reset password</h1>
+        <p class="muted">We’ll send a reset code and let you set a new password for the account that matches your email.</p>
+        <form class="stack-form" id="forgotPasswordForm">
+          <label>
+            <span>Email</span>
+            <input type="email" name="email" value="${escapeHtml(resetEmail)}" required />
+          </label>
+          <button class="secondary full" type="button" data-action="send-reset-code">Send reset code</button>
+          <label>
+            <span>Reset code</span>
+            <input type="text" name="resetCode" inputmode="numeric" maxlength="8" placeholder="Enter your code" />
+          </label>
+          <label>
+            <span>New password</span>
+            <input type="password" name="password" minlength="8" required />
+          </label>
+          <label>
+            <span>Confirm password</span>
+            <input type="password" name="confirmPassword" minlength="8" required />
+          </label>
+          <button class="primary full" type="submit">Update password</button>
+        </form>
+        <div class="auth-action-stack">
+          <button class="text-link auth-forgot-link" type="button" data-view="login">Back to sign in</button>
         </div>
       </div>
     </section>
@@ -2740,6 +2768,7 @@ function bindCommonEvents() {
 
 function bindViewEvents() {
   if (view === "login") bindLogin();
+  if (view === "forgot-password") bindForgotPassword();
   if (view === "onboard-client") bindClientOnboarding();
   if (view === "onboard-worker") bindWorkerOnboarding();
   if (view === "client-dashboard") bindClientDashboard();
@@ -2777,6 +2806,76 @@ function bindLogin() {
     writeSession({ role: user.role, id: user.id });
     if (user.role === "worker") navigate("worker-dashboard");
     else navigate("client-dashboard");
+  });
+}
+
+function bindForgotPassword() {
+  const form = document.querySelector("#forgotPasswordForm");
+  if (!form) return;
+  let resetTarget = null;
+
+  document.querySelector("[data-action='send-reset-code']").addEventListener("click", () => {
+    const email = String(new FormData(form).get("email") || "").trim();
+    if (!email) {
+      showFormError(form, "Please add your email first.");
+      return;
+    }
+
+    const user =
+      Object.values(state.clients).find((item) => item.email.toLowerCase() === email.toLowerCase()) ||
+      Object.values(state.workers).find((item) => item.email.toLowerCase() === email.toLowerCase());
+    if (!user) {
+      showFormError(form, "We could not find that email.");
+      return;
+    }
+
+    resetTarget = user;
+    user.passwordResetCode = generateVerificationCode();
+    user.passwordResetSentAt = new Date().toISOString();
+    routeMeta = { ...routeMeta, email };
+    saveState();
+    render();
+  });
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const formData = new FormData(form);
+    const email = String(formData.get("email") || "").trim();
+    const resetCode = String(formData.get("resetCode") || "").trim();
+    const password = String(formData.get("password") || "");
+    const confirmPassword = String(formData.get("confirmPassword") || "");
+    const user =
+      resetTarget ||
+      Object.values(state.clients).find((item) => item.email.toLowerCase() === email.toLowerCase()) ||
+      Object.values(state.workers).find((item) => item.email.toLowerCase() === email.toLowerCase());
+
+    if (!user) {
+      showFormError(form, "We could not find that email.");
+      return;
+    }
+    if (!user.passwordResetCode) {
+      showFormError(form, "Send the reset code first.");
+      return;
+    }
+    if (resetCode !== user.passwordResetCode) {
+      showFormError(form, "That reset code does not match.");
+      return;
+    }
+    if (password.length < 8) {
+      showFormError(form, "Please make your password at least 8 characters long.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      showFormError(form, "Your password entries do not match.");
+      return;
+    }
+
+    Object.assign(user, passwordRecord(password));
+    user.passwordResetCode = "";
+    user.passwordResetSentAt = "";
+    saveState();
+    writeSession({ role: user.role, id: user.id });
+    navigate(user.role === "worker" ? "worker-dashboard" : "client-dashboard");
   });
 }
 
@@ -3141,15 +3240,20 @@ function bindClientDashboard() {
     button.addEventListener("click", () => {
       const job = state.jobs.find((item) => item.id === button.dataset.jobId);
       const worker = getWorker(button.dataset.workerId);
+      const session = readSession();
       job.status = "In Progress";
       job.acceptedWorkerId = worker.id;
-      ensureConversationForJob(job);
+      const conversation = ensureConversationForJob(job);
       job.applications = job.applications.map((application) => ({
         ...application,
         status: application.workerId === worker.id ? "Accepted" : "Not selected",
         acceptedAt: application.workerId === worker.id ? new Date().toISOString() : application.acceptedAt
       }));
       saveState();
+      if (session && session.role === "client" && conversation) {
+        navigate("messages", { conversationId: conversation.id, returnTo: "/client" });
+        return;
+      }
       render();
     });
   });
