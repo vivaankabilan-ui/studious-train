@@ -1605,12 +1605,14 @@ function renderLanding() {
 }
 
 function renderLogin() {
+  const loginNotice = routeMeta.loginNotice || "";
   return `
     <section class="auth-layout auth-layout--single auth-layout--login">
       <div class="auth-panel auth-panel--login">
         <p class="eyebrow">Secure access</p>
         <h1>Sign in</h1>
         <p class="muted">Use the same sign-in screen for every account and pick up right where you left off.</p>
+        ${loginNotice ? `<div class="form-success">${escapeHtml(loginNotice)}</div>` : ""}
         <form class="stack-form" id="loginForm">
           <label>
             <span>Email</span>
@@ -1633,18 +1635,20 @@ function renderLogin() {
 
 function renderForgotPassword() {
   const resetEmail = routeMeta.email || "";
+  const resetNotice = routeMeta.resetNotice || "";
   return `
     <section class="auth-layout auth-layout--single auth-layout--login">
       <div class="auth-panel auth-panel--login">
         <p class="eyebrow">Secure access</p>
         <h1>Reset password</h1>
         <p class="muted">We’ll send a reset code and let you set a new password for the account that matches your email.</p>
+        ${resetNotice ? `<div class="form-success">${escapeHtml(resetNotice)}</div>` : ""}
         <form class="stack-form" id="forgotPasswordForm">
           <label>
             <span>Email</span>
             <input type="email" name="email" value="${escapeHtml(resetEmail)}" required />
           </label>
-          <button class="secondary full" type="button" data-action="send-reset-code">Send reset code</button>
+          <button class="secondary full" type="button" data-action="send-reset-code">Send Reset Link</button>
           <label>
             <span>Reset code</span>
             <input type="text" name="resetCode" inputmode="numeric" maxlength="8" placeholder="Enter your code" />
@@ -2832,7 +2836,7 @@ function bindForgotPassword() {
     resetTarget = user;
     user.passwordResetCode = generateVerificationCode();
     user.passwordResetSentAt = new Date().toISOString();
-    routeMeta = { ...routeMeta, email };
+    routeMeta = { ...routeMeta, email, resetNotice: "Reset link ready. Check your email and use the code on this page." };
     saveState();
     render();
   });
@@ -2874,8 +2878,8 @@ function bindForgotPassword() {
     user.passwordResetCode = "";
     user.passwordResetSentAt = "";
     saveState();
-    writeSession({ role: user.role, id: user.id });
-    navigate(user.role === "worker" ? "worker-dashboard" : "client-dashboard");
+    routeMeta = { loginNotice: "Password updated. Please sign in with your new password." };
+    navigate("login", { loginNotice: "Password updated. Please sign in with your new password." });
   });
 }
 

@@ -2056,6 +2056,11 @@ textarea:focus {
   display: grid;
   gap: 14px;
   align-content: start;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .trust-panel {
@@ -2106,6 +2111,15 @@ textarea:focus {
   padding: 0;
   color: var(--blue);
   font-weight: 800;
+}
+
+.form-success {
+  padding: 12px 14px;
+  border: 1px solid rgba(24, 58, 97, 0.14);
+  border-radius: calc(var(--radius) - 4px);
+  background: #f4f8ff;
+  color: var(--ink);
+  font-weight: 700;
 }
 
 .segmented {
