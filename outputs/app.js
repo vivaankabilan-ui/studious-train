@@ -2037,6 +2037,43 @@ function renderClientDashboard() {
               <span>Negotiable</span>
             </label>
             <button class="primary full" type="submit">Post job</button>
+            <div class="post-visual-stack" aria-hidden="true">
+              <div class="post-visual-stack__top">
+                <span class="visual-badge visual-badge--green">Live preview</span>
+                <span class="post-visual-stack__meta">Looks like the public feed</span>
+              </div>
+              <div class="post-visual-stage">
+                <div class="post-visual-main">
+                  <div class="post-visual-main__head">
+                    <strong>Walk the dog after school</strong>
+                    <span>Today · 3 applicants</span>
+                  </div>
+                  <div class="post-visual-chips">
+                    <span>Fixed</span>
+                    <span>CHF 40</span>
+                    <span>Negotiable</span>
+                  </div>
+                  <div class="post-visual-profiles">
+                    ${["Maya", "Eli", "Nia"].map((name, index) => `<span style="--delay:${index * 90}ms">${escapeHtml(name)}</span>`).join("")}
+                  </div>
+                </div>
+                <div class="post-visual-side">
+                  <div class="post-visual-mini-card post-visual-mini-card--accent">
+                    <strong>Nearby matches</strong>
+                    <span>Students with pet care experience</span>
+                  </div>
+                  <div class="post-visual-mini-card">
+                    <strong>Request feed</strong>
+                    <span>New applications slide in instantly</span>
+                  </div>
+                </div>
+              </div>
+              <div class="post-visual-footer">
+                <span>Job posted</span>
+                <span>Client inbox</span>
+                <span>Student feed</span>
+              </div>
+            </div>
           </form>
         </section>
 
