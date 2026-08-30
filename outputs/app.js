@@ -28,6 +28,11 @@ const defaultPhotos = {
 const API_STATE_ENDPOINT = "/api/state";
 const SESSION_KEY = "partime-auth-session-v1";
 const DEFAULT_SEED_PASSWORD = "ParTime1234!";
+const DEMO_ACCOUNT_NAME = "Vivaan Kabilan_Test";
+const DEMO_ACCOUNT_IDS = {
+  client: "c1",
+  worker: "w1"
+};
 
 let view = "landing";
 let routeMeta = {};
@@ -148,6 +153,42 @@ function clearSession() {
   } catch {
     // ignore
   }
+}
+
+function ensureDemoAccount(role) {
+  if (role === "worker") {
+    const targetId = DEMO_ACCOUNT_IDS.worker;
+    if (!state.workers[targetId]) {
+      const fallback = createDefaultState().workers.w1;
+      state.workers[targetId] = {
+        ...fallback,
+        id: targetId
+      };
+    }
+    state.workers[targetId].name = DEMO_ACCOUNT_NAME;
+    state.selectedWorkerId = targetId;
+    return targetId;
+  }
+
+  const targetId = DEMO_ACCOUNT_IDS.client;
+  if (!state.clients[targetId]) {
+    const fallback = createDefaultState().clients.c1;
+    state.clients[targetId] = {
+      ...fallback,
+      id: targetId
+    };
+  }
+  state.clients[targetId].name = DEMO_ACCOUNT_NAME;
+  state.selectedClientId = targetId;
+  return targetId;
+}
+
+async function signInAsDemoAccount(role) {
+  const targetRole = role === "worker" ? "worker" : "client";
+  const targetId = ensureDemoAccount(targetRole);
+  writeSession({ role: targetRole, id: targetId });
+  await saveState();
+  navigate(targetRole === "worker" ? "worker-dashboard" : "client-dashboard");
 }
 
 function createDefaultState() {
@@ -1293,8 +1334,8 @@ function renderHeader() {
         ` : ""}
       </div>
       <div class="header-actions">
-        <button class="ghost small" data-view="client-dashboard">Client profile</button>
-        <button class="ghost small" data-view="worker-dashboard">Student profile</button>
+        <button class="ghost small" type="button" data-action="open-demo-client">Client profile</button>
+        <button class="ghost small" type="button" data-action="open-demo-worker">Student profile</button>
         ${session ? `<button class="nav-link logout-link" data-action="logout">Log out</button>` : ""}
       </div>
     </header>
@@ -2719,6 +2760,18 @@ function bindCommonEvents() {
       const returnTo = pathForView(view, routeMeta);
       routeMeta = { returnTo };
       navigate("messages", { returnTo });
+    });
+  });
+
+  document.querySelectorAll("[data-action='open-demo-client']").forEach((button) => {
+    button.addEventListener("click", () => {
+      signInAsDemoAccount("client");
+    });
+  });
+
+  document.querySelectorAll("[data-action='open-demo-worker']").forEach((button) => {
+    button.addEventListener("click", () => {
+      signInAsDemoAccount("worker");
     });
   });
 
