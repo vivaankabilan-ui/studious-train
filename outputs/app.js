@@ -121,7 +121,14 @@ function generateVerificationCode() {
 function readSession() {
   try {
     const raw = sessionStorage.getItem(SESSION_KEY);
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+    const session = JSON.parse(raw);
+    if (!session || typeof session !== "object") return null;
+    if (!session.role && session.id) {
+      if (state?.clients && state.clients[session.id]) session.role = "client";
+      if (state?.workers && state.workers[session.id]) session.role = "worker";
+    }
+    return session.role && session.id ? session : null;
   } catch {
     return null;
   }
@@ -2005,7 +2012,10 @@ function renderClientDashboard() {
           <h1>Welcome, ${escapeHtml(client.name)}</h1>
           <p>${escapeHtml(client.location)} jobs and live requests. Language: ${escapeHtml(languageDisplay(client.languages || client.language))}.</p>
         </div>
-        <div class="dashboard-actions">
+      <div class="dashboard-actions">
+          <button class="icon-button" type="button" data-action="open-messages" aria-label="Open messages">
+            💬
+          </button>
           <button class="icon-button" type="button" data-action="open-notifications" aria-label="Client notifications">
             🔔
             ${clientUnreadCount ? `<span class="icon-badge">${clientUnreadCount}</span>` : ""}
@@ -2306,6 +2316,9 @@ function renderWorkerDashboard() {
           </div>
         </div>
         <div class="dashboard-actions">
+          <button class="icon-button" type="button" data-action="open-messages" aria-label="Open messages">
+            💬
+          </button>
           <button class="icon-button" type="button" data-action="open-notifications" aria-label="Student notifications">
             🔔
             ${workerUnreadCount ? `<span class="icon-badge">${workerUnreadCount}</span>` : ""}
@@ -2699,6 +2712,16 @@ function bindCommonEvents() {
     });
   });
 
+  document.querySelectorAll("[data-action='open-messages']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const session = readSession();
+      if (!session) return;
+      const returnTo = pathForView(view, routeMeta);
+      routeMeta = { returnTo };
+      navigate("messages", { returnTo });
+    });
+  });
+
   document.querySelectorAll("[data-action='open-request']").forEach((button) => {
     button.addEventListener("click", () => {
       const session = readSession();
@@ -2807,8 +2830,9 @@ function bindLogin() {
       return;
     }
 
-    writeSession({ role: user.role, id: user.id });
-    if (user.role === "worker") navigate("worker-dashboard");
+    const role = state.clients[user.id] ? "client" : "worker";
+    writeSession({ role, id: user.id });
+    if (role === "worker") navigate("worker-dashboard");
     else navigate("client-dashboard");
   });
 }
