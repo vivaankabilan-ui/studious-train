@@ -1623,11 +1623,11 @@ function renderLogin() {
         <form class="stack-form" id="loginForm">
           <label>
             <span>Email</span>
-            <input type="email" name="email" value="" required />
+            <input type="email" name="email" placeholder="name@example.com" autocomplete="username" required />
           </label>
           <label>
             <span>Password</span>
-            <input type="password" name="password" required />
+            <input type="password" name="password" placeholder="Enter your password" autocomplete="current-password" required />
           </label>
           <button class="primary full" type="submit">Submit</button>
         </form>
