@@ -1810,6 +1810,34 @@ function renderClientVerificationScreen() {
   `;
 }
 
+function isValidPersonName(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return false;
+  return /^[\p{L}]+(?:[ -][\p{L}]+)*$/u.test(normalized);
+}
+
+function passwordFieldMarkup(name, label, autocomplete = "new-password") {
+  const fieldId = `field-${name}`;
+  return `
+    <label class="field" for="${fieldId}">
+      <span>${escapeHtml(label)}</span>
+      <div class="password-field">
+        <input id="${fieldId}" type="password" name="${escapeHtml(name)}" autocomplete="${escapeHtml(autocomplete)}" required />
+        <button
+          type="button"
+          class="password-toggle"
+          data-password-toggle="${escapeHtml(fieldId)}"
+          aria-controls="${fieldId}"
+          aria-pressed="false"
+          aria-label="Show password"
+        >
+          ${icon("eye")}
+        </button>
+      </div>
+    </label>
+  `;
+}
+
 function renderClientDetailsForm() {
   const client = getClient();
   const isProfileEdit = routeMeta.mode === "edit";
@@ -1828,7 +1856,7 @@ function renderClientDetailsForm() {
         <div class="form-grid onboarding-grid">
           <label>
             <span>First name</span>
-            <input type="text" name="name" value="${escapeHtml(client.name)}" required />
+            <input type="text" name="name" placeholder="Jordan Taylor" value="${routeMeta.mode === "edit" ? escapeHtml(client.name) : ""}" required />
           </label>
           <label>
             <span>Last name</span>
@@ -1854,14 +1882,8 @@ function renderClientDetailsForm() {
             <span>Preferred currency</span>
             <select name="preferredCurrency" required>${currencyOptions(client.preferredCurrency || "CHF")}</select>
           </label>
-          <label>
-            <span>Create password</span>
-            <input type="password" name="password" required />
-          </label>
-          <label>
-            <span>Confirm password</span>
-            <input type="password" name="confirmPassword" required />
-          </label>
+          ${passwordFieldMarkup("password", "Create password")}
+          ${passwordFieldMarkup("confirmPassword", "Confirm password")}
         </div>
         <fieldset>
           <legend>Services you are interested in</legend>
@@ -1965,7 +1987,7 @@ function renderWorkerDetailsForm() {
           <div class="form-grid onboarding-grid">
             <label>
               <span>First name</span>
-              <input type="text" name="name" value="${escapeHtml(worker.name)}" required />
+              <input type="text" name="name" placeholder="Jordan Taylor" value="${routeMeta.mode === "edit" ? escapeHtml(worker.name) : ""}" required />
             </label>
             <label>
               <span>Last name</span>
@@ -1995,14 +2017,8 @@ function renderWorkerDetailsForm() {
               <legend>What languages do you speak?</legend>
               <div class="check-grid">${languageCheckboxes(worker.languages || worker.language)}</div>
             </fieldset>
-            <label>
-              <span>Create password</span>
-              <input type="password" name="password" required />
-            </label>
-            <label>
-              <span>Confirm password</span>
-              <input type="password" name="confirmPassword" required />
-            </label>
+            ${passwordFieldMarkup("password", "Create password")}
+            ${passwordFieldMarkup("confirmPassword", "Confirm password")}
           </div>
         </div>
         <label>
@@ -3555,3 +3571,91 @@ async function bootstrap() {
 }
 
 bootstrap();
+function enhanceSignupFields() {
+  const signupForms = document.querySelectorAll('[data-form="client-details"], [data-form="worker-details"]');
+  signupForms.forEach((form) => {
+    if (form.dataset.signupEnhanced === "true") return;
+    form.dataset.signupEnhanced = "true";
+
+    const nameField = form.querySelector('input[name="name"]');
+    const nameValue = String(nameField?.value || "").trim();
+    const isEditing = routeMeta?.mode === "edit";
+    if (nameField && !isEditing) {
+      if (!nameValue || nameValue === "Jordan Taylor") {
+        nameField.value = "";
+      }
+      nameField.placeholder = "Jordan Taylor";
+      nameField.autocomplete = "name";
+    }
+
+    const passwordFields = form.querySelectorAll('input[type="password"]');
+    passwordFields.forEach((field) => {
+      if (field.parentElement?.classList.contains("password-field")) return;
+      const wrapper = document.createElement("div");
+      wrapper.className = "password-field";
+      field.parentNode.insertBefore(wrapper, field);
+      wrapper.appendChild(field);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "password-toggle";
+      button.setAttribute("aria-label", "Show password");
+      button.setAttribute("aria-pressed", "false");
+      button.innerHTML = `${icon("eye")}`;
+      wrapper.appendChild(button);
+    });
+  });
+}
+
+function bindSignupEnhancements() {
+  enhanceSignupFields();
+
+  document.addEventListener(
+    "submit",
+    (event) => {
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement)) return;
+      if (!form.matches('[data-form="client-details"], [data-form="worker-details"]')) return;
+      const nameField = form.querySelector('input[name="name"]');
+      const name = String(nameField?.value || "").trim();
+      if (!nameField || !isValidPersonName(name)) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (nameField) {
+          nameField.classList.add("field-error");
+          nameField.setAttribute("aria-invalid", "true");
+        }
+        showFormError(form, "Please enter a valid name. Names can only contain letters, spaces, and hyphens (-).");
+      }
+    },
+    true,
+  );
+
+  document.addEventListener("input", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.name !== "name") return;
+    if (target.closest('[data-form="client-details"], [data-form="worker-details"]')) {
+      target.classList.remove("field-error");
+      target.removeAttribute("aria-invalid");
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest?.("[data-password-toggle]");
+    if (!button) return;
+    const fieldId = button.getAttribute("data-password-toggle");
+    const input = fieldId ? document.getElementById(fieldId) : null;
+    if (!(input instanceof HTMLInputElement)) return;
+    const visible = input.type === "text";
+    input.type = visible ? "password" : "text";
+    button.setAttribute("aria-pressed", String(!visible));
+    button.setAttribute("aria-label", visible ? "Show password" : "Hide password");
+    button.innerHTML = visible ? `${icon("eye")}` : `${icon("eye-off")}`;
+  });
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bindSignupEnhancements, { once: true });
+} else {
+  bindSignupEnhancements();
+}

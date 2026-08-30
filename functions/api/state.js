@@ -768,6 +768,7 @@ export async function onRequest(context) {
     const state = await request.json();
     try {
       await env.DB.exec("BEGIN");
+      validateStateNames(state);
       await saveState(env.DB, state);
       await env.DB.exec("COMMIT");
       return jsonResponse({ ok: true });
@@ -780,4 +781,28 @@ export async function onRequest(context) {
   }
 
   return jsonResponse({ error: "Method not allowed." }, { status: 405 });
+}
+
+function isValidPersonName(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return false;
+  return /^[\p{L}]+(?:[ -][\p{L}]+)*$/u.test(normalized);
+}
+
+function validateStateNames(state) {
+  for (const client of state.clients || []) {
+    if (client.name && !isValidPersonName(client.name)) {
+      throw new Error(`Invalid client name for ${client.id || "unknown client"}.`);
+    }
+  }
+  for (const worker of state.workers || []) {
+    if (worker.name && !isValidPersonName(worker.name)) {
+      throw new Error(`Invalid worker name for ${worker.id || "unknown worker"}.`);
+    }
+  }
+  for (const parent of state.parents || []) {
+    if (parent.name && !isValidPersonName(parent.name)) {
+      throw new Error(`Invalid parent name for ${parent.id || "unknown parent"}.`);
+    }
+  }
 }
