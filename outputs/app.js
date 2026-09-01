@@ -2685,7 +2685,7 @@ function bindCommonEvents() {
         navigate("client-dashboard");
         return;
       }
-      navigate("login", { role: "client", loginNotice: "Sign in to view your client profile." });
+      navigate("onboard-client", { role: "client", stage: "register" });
     });
   });
 
@@ -2696,7 +2696,7 @@ function bindCommonEvents() {
         navigate("worker-dashboard");
         return;
       }
-      navigate("login", { role: "worker", loginNotice: "Sign in to view your student profile." });
+      navigate("onboard-worker", { role: "worker", stage: "register" });
     });
   });
 
