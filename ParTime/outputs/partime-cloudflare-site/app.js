@@ -35,7 +35,6 @@ const SESSION_KEY = "partime-auth-session-v1";
 const LOGIN_DRAFT_KEY = "partime-login-draft-v1";
 const ONBOARDING_KEY = "partime-onboarding-draft-v1";
 const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_SEED_PASSWORD = "ParTime1234!";
 const DEFAULT_UI_PREFERENCES = {
   theme: "emerald",
   automaticFilters: true,
@@ -300,310 +299,17 @@ function createBlankWorkerDraft() {
 
 function createDefaultState() {
   return {
-    selectedClientId: "c1",
-    selectedWorkerId: "w1",
-    selectedParentId: "p1",
-    clients: {
-      c1: {
-        id: "c1",
-        role: "client",
-        name: "Jordan Taylor",
-        email: "jordan@example.com",
-        phone: "",
-        emailVerificationCode: "",
-        emailVerificationSentAt: "",
-        emailVerifiedAt: "2026-07-01T00:00:00",
-        language: "English",
-        location: "Maplewood",
-        typicalServices: ["Lawn Care", "Pet Sitting", "Tech Help"],
-        preferredCurrency: "USD",
-        uiPreferences: normalizeUiPreferences(),
-        ...passwordRecord(DEFAULT_SEED_PASSWORD, "client-c1")
-      },
-      c2: {
-        id: "c2",
-        role: "client",
-        name: "Priya Shah",
-        email: "priya@example.com",
-        phone: "",
-        emailVerificationCode: "",
-        emailVerificationSentAt: "",
-        emailVerifiedAt: "2026-07-01T00:00:00",
-        language: "English",
-        location: "Cedar Grove",
-        typicalServices: ["Pet Sitting", "Tutoring", "Errands"],
-        preferredCurrency: "USD",
-        uiPreferences: normalizeUiPreferences(),
-        ...passwordRecord(DEFAULT_SEED_PASSWORD, "client-c2")
-      }
-    },
-    workers: {
-      w1: {
-        id: "w1",
-        role: "worker",
-        name: "Maya Hernandez",
-        email: "maya.student@example.com",
-        phone: "",
-        emailVerificationCode: "",
-        emailVerificationSentAt: "",
-        emailVerifiedAt: "2026-07-01T00:00:00",
-        parentEmail: "ana.parent@example.com",
-        parentConfirmed: true,
-        age: 16,
-        school: "Lincoln High School",
-        language: "English",
-        location: "Maplewood",
-        bio: "Reliable after-school student who enjoys yard projects, pets, and weekend errands.",
-        services: ["Lawn Care", "Pet Sitting", "Errands"],
-        certifications: ["Pet first aid", "Honor roll", "Community service club"],
-        photo: defaultPhotos.w1,
-        uiPreferences: normalizeUiPreferences(),
-        ...passwordRecord(DEFAULT_SEED_PASSWORD, "worker-w1"),
-        ratings: [
-          { jobId: "r1", clientId: "c2", stars: 5, createdAt: "2026-05-10T12:00:00" },
-          { jobId: "r2", clientId: "c1", stars: 4, createdAt: "2026-05-24T12:00:00" },
-          { jobId: "r3", clientId: "c2", stars: 5, createdAt: "2026-06-06T12:00:00" },
-          { jobId: "r4", clientId: "c1", stars: 5, createdAt: "2026-06-22T12:00:00" }
-        ],
-        nextTimes: [
-          { clientId: "c1", jobId: "j5", createdAt: "2026-06-30T18:20:00" }
-        ]
-      },
-      w2: {
-        id: "w2",
-        role: "worker",
-        name: "Eli Brooks",
-        email: "eli.student@example.com",
-        phone: "",
-        emailVerificationCode: "",
-        emailVerificationSentAt: "",
-        emailVerifiedAt: "2026-07-01T00:00:00",
-        parentEmail: "sarah.parent@example.com",
-        parentConfirmed: true,
-        age: 17,
-        school: "Roosevelt Academy",
-        language: "Spanish",
-        location: "Maplewood",
-        bio: "Patient tutor and tech student available after school and on Saturdays.",
-        services: ["Tutoring", "Tech Help"],
-        certifications: ["Math team", "Student tech desk"],
-        photo: defaultPhotos.w2,
-        uiPreferences: normalizeUiPreferences(),
-        ...passwordRecord(DEFAULT_SEED_PASSWORD, "worker-w2"),
-        ratings: [
-          { jobId: "e1", clientId: "c1", stars: 5, createdAt: "2026-04-11T12:00:00" },
-          { jobId: "e2", clientId: "c2", stars: 5, createdAt: "2026-04-18T12:00:00" },
-          { jobId: "e3", clientId: "c1", stars: 4, createdAt: "2026-05-09T12:00:00" },
-          { jobId: "e4", clientId: "c2", stars: 5, createdAt: "2026-06-02T12:00:00" },
-          { jobId: "e5", clientId: "c1", stars: 5, createdAt: "2026-06-15T12:00:00" }
-        ],
-        nextTimes: []
-      },
-      w3: {
-        id: "w3",
-        role: "worker",
-        name: "Nia Patel",
-        email: "nia.student@example.com",
-        phone: "",
-        emailVerificationCode: "",
-        emailVerificationSentAt: "",
-        emailVerifiedAt: "2026-07-01T00:00:00",
-        parentEmail: "dev.parent@example.com",
-        parentConfirmed: true,
-        age: 15,
-        school: "Lincoln High School",
-        language: "Hindi",
-        location: "Cedar Grove",
-        bio: "Animal-loving student with experience walking dogs and caring for cats.",
-        services: ["Pet Sitting", "Snow Help", "Lawn Care"],
-        certifications: ["Shelter volunteer", "Babysitting basics"],
-        photo: defaultPhotos.w3,
-        uiPreferences: normalizeUiPreferences(),
-        ...passwordRecord(DEFAULT_SEED_PASSWORD, "worker-w3"),
-        ratings: [
-          { jobId: "n1", clientId: "c2", stars: 5, createdAt: "2026-05-16T12:00:00" },
-          { jobId: "n2", clientId: "c1", stars: 4, createdAt: "2026-06-12T12:00:00" }
-        ],
-        nextTimes: []
-      },
-      w4: {
-        id: "w4",
-        role: "worker",
-        name: "Theo Kim",
-        email: "theo.student@example.com",
-        phone: "",
-        emailVerificationCode: "",
-        emailVerificationSentAt: "",
-        emailVerifiedAt: "2026-07-01T00:00:00",
-        parentEmail: "min.parent@example.com",
-        parentConfirmed: true,
-        age: 16,
-        school: "Roosevelt Academy",
-        language: "Mandarin",
-        location: "Maplewood",
-        bio: "Careful student for errands, babysitting support, and simple household tasks.",
-        services: ["Errands", "Babysitting", "Tutoring"],
-        certifications: ["CPR basics", "Peer mentor"],
-        photo: defaultPhotos.w4,
-        uiPreferences: normalizeUiPreferences(),
-        ...passwordRecord(DEFAULT_SEED_PASSWORD, "worker-w4"),
-        ratings: [],
-        nextTimes: []
-      }
-    },
-    parents: {
-      p1: {
-        id: "p1",
-        role: "parent",
-        name: "Ana Hernandez",
-        email: "ana.parent@example.com",
-        emailVerificationCode: "",
-        emailVerificationSentAt: "",
-        emailVerifiedAt: "2026-07-01T00:00:00",
-        linkedWorkerId: "w1",
-        ...passwordRecord(DEFAULT_SEED_PASSWORD, "parent-p1")
-      }
-    },
-    jobs: [
-      {
-        id: "j1",
-        clientId: "c1",
-        title: "Mow front yard and bag clippings",
-        category: "Lawn Care",
-        date: "2026-07-08",
-        pay: 45,
-        payType: "Fixed",
-        currency: "USD",
-        estimatedHours: 1,
-        negotiable: true,
-        location: "Maplewood",
-        status: "Open",
-        createdAt: "2026-07-04T09:00:00",
-        applications: []
-      },
-      {
-        id: "j2",
-        clientId: "c2",
-        title: "Feed cats during weekend trip",
-        category: "Pet Sitting",
-        date: "2026-07-09",
-        pay: 60,
-        payType: "Fixed",
-        currency: "USD",
-        estimatedHours: 1,
-        negotiable: false,
-        location: "Cedar Grove",
-        status: "Open",
-        createdAt: "2026-07-03T15:30:00",
-        applications: [
-          {
-            workerId: "w3",
-            amount: 60,
-            currency: "USD",
-            payType: "Fixed",
-            status: "Applied",
-            appliedAt: "2026-07-04T08:15:00"
-          }
-        ]
-      },
-      {
-        id: "j3",
-        clientId: "c1",
-        title: "Set up new Wi-Fi printer",
-        category: "Tech Help",
-        date: "2026-07-10",
-        pay: 35,
-        payType: "Fixed",
-        currency: "USD",
-        estimatedHours: 1,
-        negotiable: true,
-        location: "Maplewood",
-        status: "Open",
-        createdAt: "2026-07-03T13:45:00",
-        applications: [
-          {
-            workerId: "w2",
-            amount: 35,
-            currency: "USD",
-            payType: "Fixed",
-            status: "Applied",
-            appliedAt: "2026-07-04T10:05:00"
-          }
-        ]
-      },
-      {
-        id: "j4",
-        clientId: "c2",
-        title: "Algebra review before exam",
-        category: "Tutoring",
-        date: "2026-07-07",
-        pay: 25,
-        payType: "Hourly",
-        currency: "USD",
-        estimatedHours: 2,
-        negotiable: false,
-        location: "Cedar Grove",
-        status: "In Progress",
-        acceptedWorkerId: "w2",
-        createdAt: "2026-07-03T11:00:00",
-        applications: [
-          {
-            workerId: "w2",
-            amount: 25,
-            currency: "USD",
-            payType: "Hourly",
-            status: "Accepted",
-            appliedAt: "2026-07-03T12:10:00",
-            acceptedAt: "2026-07-04T09:20:00"
-          }
-        ]
-      },
-      {
-        id: "j5",
-        clientId: "c1",
-        title: "Plant balcony herbs",
-        category: "Lawn Care",
-        date: "2026-07-02",
-        pay: 40,
-        payType: "Fixed",
-        currency: "USD",
-        estimatedHours: 1,
-        negotiable: false,
-        location: "Maplewood",
-        status: "Completed",
-        acceptedWorkerId: "w1",
-        completedAt: "2026-07-02T18:15:00",
-        createdAt: "2026-07-01T17:30:00",
-        ratingSubmitted: false,
-        applications: [
-          {
-            workerId: "w1",
-            amount: 40,
-            currency: "USD",
-            payType: "Fixed",
-            status: "Accepted",
-            appliedAt: "2026-07-01T18:05:00",
-            acceptedAt: "2026-07-02T09:00:00"
-          }
-        ]
-      }
-    ],
-    parentEvents: [
-      {
-        id: "e1",
-        workerId: "w1",
-        type: "Completion approved",
-        message: "Maya completed Plant balcony herbs and earned $40.",
-        createdAt: "2026-07-02T18:15:00"
-      },
-      {
-        id: "e2",
-        workerId: "w1",
-        type: "Application sent",
-        message: "Maya applied for Plant balcony herbs.",
-        createdAt: "2026-07-01T18:05:00"
-      }
-    ]
+    selectedClientId: "",
+    selectedWorkerId: "",
+    selectedParentId: "",
+    clients: {},
+    workers: {},
+    parents: {},
+    jobs: [],
+    parentEvents: [],
+    conversations: [],
+    messages: [],
+    appReviews: []
   };
 }
 
@@ -2865,7 +2571,7 @@ function bindClientOnboarding() {
       verificationStatus.classList.add("is-confirmed");
       saveOnboardingDraft("onboard-client", stage, draft.id);
       saveState();
-      showAuthNotice("Email verified. You can continue to the client profile.");
+      showAuthNotice("Email verified. Please sign in with your new account.");
       render();
     };
 
@@ -3284,7 +2990,7 @@ function handleVerificationLinkFromUrl() {
     client.emailVerificationCode = "";
     client.emailVerificationSentAt = "";
     saveState();
-    showAuthNotice("Email verified. You can continue to the client profile.");
+    showAuthNotice("Email verified. Please sign in with your new account.");
     view = "onboard-client";
     routeMeta = { stage: "verify" };
     clearUrl();
@@ -3349,7 +3055,7 @@ function handleVerificationLinkFromUrl() {
     worker.parentVerificationSentAt = "";
     createAutoParentAccount(worker);
     saveState();
-    showAuthNotice("Parent verified. You can continue to the student profile.");
+    showAuthNotice("Parent verified. Please sign in to view the student profile.");
     view = "onboard-worker";
     routeMeta = { stage: "verify" };
     clearUrl();
