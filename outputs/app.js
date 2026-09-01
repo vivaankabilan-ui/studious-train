@@ -280,6 +280,60 @@ function createSignupRecord(role, email, password) {
   return state.clients[id];
 }
 
+function activateTestAccount(role) {
+  const normalizedRole = role === "worker" ? "worker" : "client";
+  const email =
+    normalizedRole === "worker"
+      ? "vivaan.kabilan_test.student@partime.test"
+      : "vivaan.kabilan_test.client@partime.test";
+  let user = findUserByEmail(email);
+
+  if (!user) {
+    user = createSignupRecord(normalizedRole, email, "VivaanKabilan_Test123!");
+  }
+
+  if (normalizedRole === "worker") {
+    Object.assign(user, {
+      name: "Vivaan Kabilan_Test",
+      phone: user.phone || "",
+      emailVerifiedAt: user.emailVerifiedAt || new Date().toISOString(),
+      emailVerificationCode: "",
+      emailVerificationSentAt: "",
+      location: user.location || "La Châtaigneraie",
+      language: user.language || "English",
+      age: user.age || 17,
+      school: user.school || "Ecolint",
+      parentEmail: user.parentEmail || "parent@example.com",
+      parentConfirmed: true,
+      bio: user.bio || "Test account used to preview the student dashboard.",
+      services: Array.isArray(user.services) && user.services.length ? user.services : ["Tutoring", "Errands"],
+      certifications: Array.isArray(user.certifications) && user.certifications.length ? user.certifications : ["Reliable", "Friendly"],
+      nextTimes: Array.isArray(user.nextTimes) ? user.nextTimes : [],
+      ratings: Array.isArray(user.ratings) ? user.ratings : []
+    });
+    state.selectedWorkerId = user.id;
+    state.selectedClientId = "";
+  } else {
+    Object.assign(user, {
+      name: "Vivaan Kabilan_Test",
+      phone: user.phone || "",
+      emailVerifiedAt: user.emailVerifiedAt || new Date().toISOString(),
+      emailVerificationCode: "",
+      emailVerificationSentAt: "",
+      location: user.location || "La Châtaigneraie",
+      language: user.language || "English",
+      preferredCurrency: user.preferredCurrency || "CHF",
+      typicalServices: Array.isArray(user.typicalServices) && user.typicalServices.length ? user.typicalServices : ["Tutoring", "Errands"]
+    });
+    state.selectedClientId = user.id;
+    state.selectedWorkerId = "";
+  }
+
+  writeSession({ role: normalizedRole, id: user.id });
+  void saveState();
+  return user;
+}
+
 function setOnboardingComplete(user, data = {}) {
   user.uiPreferences = {
     ...(user.uiPreferences || {}),
@@ -2680,23 +2734,15 @@ function bindCommonEvents() {
 
   document.querySelectorAll("[data-action='open-client-profile']").forEach((button) => {
     button.addEventListener("click", () => {
-      const session = readSession();
-      if (session?.role === "client") {
-        navigate("client-dashboard");
-        return;
-      }
-      navigate("onboard-client", { role: "client", stage: "register" });
+      activateTestAccount("client");
+      navigate("client-dashboard");
     });
   });
 
   document.querySelectorAll("[data-action='open-worker-profile']").forEach((button) => {
     button.addEventListener("click", () => {
-      const session = readSession();
-      if (session?.role === "worker") {
-        navigate("worker-dashboard");
-        return;
-      }
-      navigate("onboard-worker", { role: "worker", stage: "register" });
+      activateTestAccount("worker");
+      navigate("worker-dashboard");
     });
   });
 
