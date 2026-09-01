@@ -26,13 +26,18 @@ const defaultPhotos = {
 };
 
 const API_STATE_ENDPOINT = "/api/state";
+const AUTH_EMAIL_ENDPOINT = "/api/auth-email";
 const SESSION_KEY = "partime-auth-session-v1";
-const DEFAULT_SEED_PASSWORD = "ParTime1234!";
-const DEMO_ACCOUNT_NAME = "Vivaan Kabilan_Test";
-const DEMO_ACCOUNT_IDS = {
-  client: "c1",
-  worker: "w1"
-};
+const ONBOARDING_EXPIRES_IN_MS = 30 * 60 * 1000;
+const AGE_RANGE_OPTIONS = [
+  { value: "Under 18", label: "Under 18" },
+  { value: "18-24", label: "18-24" },
+  { value: "25-34", label: "25-34" },
+  { value: "35-44", label: "35-44" },
+  { value: "45-54", label: "45-54" },
+  { value: "55-64", label: "55-64" },
+  { value: "65+", label: "65+" }
+];
 
 let view = "landing";
 let routeMeta = {};
@@ -123,6 +128,169 @@ function generateVerificationCode() {
   return String(Math.floor(Math.random() * 100000000)).padStart(8, "0");
 }
 
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function findUserByEmail(email) {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return null;
+  return (
+    Object.values(state.clients).find((item) => normalizeEmail(item.email) === normalized) ||
+    Object.values(state.workers).find((item) => normalizeEmail(item.email) === normalized) ||
+    Object.values(state.parents).find((item) => normalizeEmail(item.email) === normalized) ||
+    null
+  );
+}
+
+function accountRoleForUser(user) {
+  if (!user) return "client";
+  if (state.clients?.[user.id]) return "client";
+  if (state.workers?.[user.id]) return "worker";
+  return "parent";
+}
+
+function onboardingInfo(user) {
+  return user?.uiPreferences?.onboarding || {};
+}
+
+function onboardingCompleted(user) {
+  return Boolean(user?.uiPreferences?.onboardingCompletedAt);
+}
+
+function accountNeedsVerification(user) {
+  return Boolean(user && !user.emailVerifiedAt);
+}
+
+function requiresOnboarding(user) {
+  if (!user) return false;
+  if (onboardingCompleted(user)) return false;
+  if (accountRoleForUser(user) === "worker") {
+    return !String(user.name || "").trim() || !String(user.location || "").trim() || !Number(user.age || 0) || !String(user.school || "").trim();
+  }
+  return !String(user.name || "").trim() || !String(user.location || "").trim();
+}
+
+function isEmailVerificationExpired(sentAt) {
+  const time = Date.parse(sentAt || "");
+  if (!Number.isFinite(time)) return true;
+  return Date.now() - time > ONBOARDING_EXPIRES_IN_MS;
+}
+
+function sanitizeOnboardingText(value) {
+  return String(value || "").trim();
+}
+
+function userPostalCode(user) {
+  return onboardingInfo(user).postalCode || "";
+}
+
+function userDisplayName(user) {
+  const info = onboardingInfo(user);
+  return info.preferredName || user?.name || user?.email || "";
+}
+
+function ageRangeToNumericAge(range) {
+  switch (String(range || "")) {
+    case "Under 18":
+      return 17;
+    case "18-24":
+      return 18;
+    case "25-34":
+      return 25;
+    case "35-44":
+      return 35;
+    case "45-54":
+      return 45;
+    case "55-64":
+      return 55;
+    case "65+":
+      return 65;
+    default:
+      return 17;
+  }
+}
+
+async function sendVerificationEmail({ to, code, role }) {
+  const response = await fetch(AUTH_EMAIL_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      to,
+      code,
+      purpose: "account-verification",
+      subject: role === "worker" ? "Verify your ParTime student account" : "Verify your ParTime account",
+      label: role === "worker" ? "student" : "client"
+    })
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok && payload.status !== "not_configured") {
+    throw new Error(payload.error || "We could not send the verification email.");
+  }
+  if (payload.status === "not_configured") {
+    throw new Error(payload.error || "Email sending is not configured yet.");
+  }
+  return payload;
+}
+
+function createSignupRecord(role, email, password) {
+  const normalizedEmail = normalizeEmail(email);
+  const idPrefix = role === "worker" ? "w" : "c";
+  const id = `${idPrefix}${Date.now()}${Math.random().toString(16).slice(2, 6)}`;
+  const record = {
+    id,
+    email: normalizedEmail,
+    phone: "",
+    emailVerificationCode: "",
+    emailVerificationSentAt: "",
+    emailVerifiedAt: "",
+    language: "English",
+    location: "",
+    uiPreferences: {},
+    ...passwordRecord(password)
+  };
+
+  if (role === "worker") {
+    state.workers[id] = {
+      ...record,
+      name: "",
+      parentEmail: "",
+      parentConfirmed: false,
+      age: 0,
+      school: "",
+      bio: "",
+      services: [],
+      certifications: [],
+      photo: "",
+      ratings: [],
+      nextTimes: []
+    };
+    return state.workers[id];
+  }
+
+  state.clients[id] = {
+    ...record,
+    name: "",
+    typicalServices: [],
+    preferredCurrency: "CHF"
+  };
+  return state.clients[id];
+}
+
+function setOnboardingComplete(user, data = {}) {
+  user.uiPreferences = {
+    ...(user.uiPreferences || {}),
+    onboarding: {
+      ...(user.uiPreferences?.onboarding || {}),
+      ...data
+    },
+    onboardingCompletedAt: new Date().toISOString()
+  };
+}
+
 function readSession() {
   try {
     const raw = sessionStorage.getItem(SESSION_KEY);
@@ -155,304 +323,14 @@ function clearSession() {
   }
 }
 
-function ensureDemoAccount(role) {
-  if (role === "worker") {
-    const targetId = DEMO_ACCOUNT_IDS.worker;
-    if (!state.workers[targetId]) {
-      const fallback = createDefaultState().workers.w1;
-      state.workers[targetId] = {
-        ...fallback,
-        id: targetId
-      };
-    }
-    state.workers[targetId].name = DEMO_ACCOUNT_NAME;
-    state.selectedWorkerId = targetId;
-    return targetId;
-  }
-
-  const targetId = DEMO_ACCOUNT_IDS.client;
-  if (!state.clients[targetId]) {
-    const fallback = createDefaultState().clients.c1;
-    state.clients[targetId] = {
-      ...fallback,
-      id: targetId
-    };
-  }
-  state.clients[targetId].name = DEMO_ACCOUNT_NAME;
-  state.selectedClientId = targetId;
-  return targetId;
-}
-
-async function signInAsDemoAccount(role) {
-  const targetRole = role === "worker" ? "worker" : "client";
-  const targetId = ensureDemoAccount(targetRole);
-  writeSession({ role: targetRole, id: targetId });
-  await saveState();
-  navigate(targetRole === "worker" ? "worker-dashboard" : "client-dashboard");
-}
-
 function createDefaultState() {
   return {
-    selectedClientId: "c1",
-    selectedWorkerId: "w1",
-    clients: {
-      c1: {
-        id: "c1",
-        name: "Jordan Taylor",
-        email: "jordan@example.com",
-        phone: "",
-        notificationSeenAt: "2026-07-01T00:00:00",
-        emailVerificationCode: "",
-        emailVerificationSentAt: "",
-        emailVerifiedAt: "2026-07-01T00:00:00",
-        language: "English",
-        location: "Maplewood",
-        typicalServices: ["Lawn Care", "Pet Care", "Tech Help"],
-        preferredCurrency: "CHF",
-        ...passwordRecord(DEFAULT_SEED_PASSWORD, "client-c1")
-      },
-      c2: {
-        id: "c2",
-        name: "Priya Shah",
-        email: "priya@example.com",
-        phone: "",
-        notificationSeenAt: "2026-07-01T00:00:00",
-        emailVerificationCode: "",
-        emailVerificationSentAt: "",
-        emailVerifiedAt: "2026-07-01T00:00:00",
-        language: "English",
-        location: "Cedar Grove",
-        typicalServices: ["Pet Care", "Tutoring", "Errands"],
-        preferredCurrency: "CHF",
-        ...passwordRecord(DEFAULT_SEED_PASSWORD, "client-c2")
-      }
-    },
-    workers: {
-      w1: {
-        id: "w1",
-        name: "Maya Hernandez",
-        email: "maya.student@example.com",
-        phone: "",
-        notificationSeenAt: "2026-07-01T00:00:00",
-        emailVerificationCode: "",
-        emailVerificationSentAt: "",
-        emailVerifiedAt: "2026-07-01T00:00:00",
-        age: 16,
-        school: "Lincoln High School",
-        language: "English",
-        location: "Maplewood",
-        bio: "Reliable after-school student who enjoys yard projects, pets, and weekend errands.",
-        services: ["Lawn Care", "Pet Care", "Errands"],
-        certifications: ["Pet first aid", "Honor roll", "Community service club"],
-        photo: defaultPhotos.w1,
-        ...passwordRecord(DEFAULT_SEED_PASSWORD, "worker-w1"),
-        ratings: [
-          { jobId: "r1", clientId: "c2", stars: 5, createdAt: "2026-05-10T12:00:00" },
-          { jobId: "r2", clientId: "c1", stars: 4, createdAt: "2026-05-24T12:00:00" },
-          { jobId: "r3", clientId: "c2", stars: 5, createdAt: "2026-06-06T12:00:00" },
-          { jobId: "r4", clientId: "c1", stars: 5, createdAt: "2026-06-22T12:00:00" }
-        ],
-        nextTimes: [
-          { clientId: "c1", jobId: "j5", createdAt: "2026-06-30T18:20:00" }
-        ]
-      },
-      w2: {
-        id: "w2",
-        name: "Eli Brooks",
-        email: "eli.student@example.com",
-        phone: "",
-        notificationSeenAt: "2026-07-01T00:00:00",
-        emailVerificationCode: "",
-        emailVerificationSentAt: "",
-        emailVerifiedAt: "2026-07-01T00:00:00",
-        age: 17,
-        school: "Roosevelt Academy",
-        language: "Spanish",
-        location: "Maplewood",
-        bio: "Patient tutor and tech student available after school and on Saturdays.",
-        services: ["Tutoring", "Tech Help"],
-        certifications: ["Math team", "Student tech desk"],
-        photo: defaultPhotos.w2,
-        ...passwordRecord(DEFAULT_SEED_PASSWORD, "worker-w2"),
-        ratings: [
-          { jobId: "e1", clientId: "c1", stars: 5, createdAt: "2026-04-11T12:00:00" },
-          { jobId: "e2", clientId: "c2", stars: 5, createdAt: "2026-04-18T12:00:00" },
-          { jobId: "e3", clientId: "c1", stars: 4, createdAt: "2026-05-09T12:00:00" },
-          { jobId: "e4", clientId: "c2", stars: 5, createdAt: "2026-06-02T12:00:00" },
-          { jobId: "e5", clientId: "c1", stars: 5, createdAt: "2026-06-15T12:00:00" }
-        ],
-        nextTimes: []
-      },
-      w3: {
-        id: "w3",
-        name: "Nia Patel",
-        email: "nia.student@example.com",
-        phone: "",
-        notificationSeenAt: "2026-07-01T00:00:00",
-        emailVerificationCode: "",
-        emailVerificationSentAt: "",
-        emailVerifiedAt: "2026-07-01T00:00:00",
-        age: 15,
-        school: "Lincoln High School",
-        language: "Hindi",
-        location: "Cedar Grove",
-        bio: "Animal-loving student with experience walking dogs and caring for cats.",
-        services: ["Pet Care", "Snow Help", "Lawn Care"],
-        certifications: ["Shelter volunteer", "Babysitting basics"],
-        photo: defaultPhotos.w3,
-        ...passwordRecord(DEFAULT_SEED_PASSWORD, "worker-w3"),
-        ratings: [
-          { jobId: "n1", clientId: "c2", stars: 5, createdAt: "2026-05-16T12:00:00" },
-          { jobId: "n2", clientId: "c1", stars: 4, createdAt: "2026-06-12T12:00:00" }
-        ],
-        nextTimes: []
-      },
-      w4: {
-        id: "w4",
-        name: "Theo Kim",
-        email: "theo.student@example.com",
-        phone: "",
-        notificationSeenAt: "2026-07-01T00:00:00",
-        emailVerificationCode: "",
-        emailVerificationSentAt: "",
-        emailVerifiedAt: "2026-07-01T00:00:00",
-        age: 16,
-        school: "Roosevelt Academy",
-        language: "Mandarin",
-        location: "Maplewood",
-        bio: "Careful student for errands, babysitting support, and simple household tasks.",
-        services: ["Errands", "Babysitting", "Tutoring"],
-        certifications: ["CPR basics", "Peer mentor"],
-        photo: defaultPhotos.w4,
-        ...passwordRecord(DEFAULT_SEED_PASSWORD, "worker-w4"),
-        ratings: [],
-        nextTimes: []
-      }
-    },
-    jobs: [
-      {
-        id: "j1",
-        clientId: "c1",
-        title: "Mow front yard and bag clippings",
-        category: "Lawn Care",
-        date: "2026-07-08",
-        pay: 45,
-        payType: "Fixed",
-        currency: "CHF",
-        estimatedHours: 1,
-        negotiable: true,
-        location: "Maplewood",
-        status: "Open",
-        createdAt: "2026-07-04T09:00:00",
-        applications: []
-      },
-      {
-        id: "j2",
-        clientId: "c2",
-        title: "Feed cats during weekend trip",
-        category: "Pet Care",
-        date: "2026-07-09",
-        pay: 60,
-        payType: "Fixed",
-        currency: "CHF",
-        estimatedHours: 1,
-        negotiable: false,
-        location: "Cedar Grove",
-        status: "Open",
-        createdAt: "2026-07-03T15:30:00",
-        applications: [
-          {
-            workerId: "w3",
-            amount: 60,
-            currency: "CHF",
-            payType: "Fixed",
-            status: "Applied",
-            appliedAt: "2026-07-04T08:15:00"
-          }
-        ]
-      },
-      {
-        id: "j3",
-        clientId: "c1",
-        title: "Set up new Wi-Fi printer",
-        category: "Tech Help",
-        date: "2026-07-10",
-        pay: 35,
-        payType: "Fixed",
-        currency: "CHF",
-        estimatedHours: 1,
-        negotiable: true,
-        location: "Maplewood",
-        status: "Open",
-        createdAt: "2026-07-03T13:45:00",
-        applications: [
-          {
-            workerId: "w2",
-            amount: 35,
-            currency: "CHF",
-            payType: "Fixed",
-            status: "Applied",
-            appliedAt: "2026-07-04T10:05:00"
-          }
-        ]
-      },
-      {
-        id: "j4",
-        clientId: "c2",
-        title: "Algebra review before exam",
-        category: "Tutoring",
-        date: "2026-07-07",
-        pay: 25,
-        payType: "Hourly",
-        currency: "CHF",
-        estimatedHours: 2,
-        negotiable: false,
-        location: "Cedar Grove",
-        status: "In Progress",
-        acceptedWorkerId: "w2",
-        createdAt: "2026-07-03T11:00:00",
-        applications: [
-          {
-            workerId: "w2",
-            amount: 25,
-            currency: "CHF",
-            payType: "Hourly",
-            status: "Accepted",
-            appliedAt: "2026-07-03T12:10:00",
-            acceptedAt: "2026-07-04T09:20:00"
-          }
-        ]
-      },
-      {
-        id: "j5",
-        clientId: "c1",
-        title: "Plant balcony herbs",
-        category: "Lawn Care",
-        date: "2026-07-02",
-        pay: 40,
-        payType: "Fixed",
-        currency: "CHF",
-        estimatedHours: 1,
-        negotiable: false,
-        location: "Maplewood",
-        status: "Completed",
-        acceptedWorkerId: "w1",
-        completedAt: "2026-07-02T18:15:00",
-        createdAt: "2026-07-01T17:30:00",
-        ratingSubmitted: false,
-        applications: [
-          {
-            workerId: "w1",
-            amount: 40,
-            currency: "CHF",
-            payType: "Fixed",
-            status: "Accepted",
-            appliedAt: "2026-07-01T18:05:00",
-            acceptedAt: "2026-07-02T09:00:00"
-          }
-        ]
-      }
-    ],
+    selectedClientId: "",
+    selectedWorkerId: "",
+    clients: {},
+    workers: {},
+    parents: {},
+    jobs: [],
     conversations: [],
     messages: [],
   };
@@ -1334,8 +1212,8 @@ function renderHeader() {
         ` : ""}
       </div>
       <div class="header-actions">
-        <button class="ghost small" type="button" data-action="open-demo-client">Client profile</button>
-        <button class="ghost small" type="button" data-action="open-demo-worker">Student profile</button>
+        <button class="ghost small" type="button" data-action="open-client-profile">Client profile</button>
+        <button class="ghost small" type="button" data-action="open-worker-profile">Student profile</button>
         ${session ? `<button class="nav-link logout-link" data-action="logout">Log out</button>` : ""}
       </div>
     </header>
@@ -1725,14 +1603,14 @@ function renderCreateAccount() {
       <div class="auth-panel">
         <p class="eyebrow">New account</p>
         <h1>Create account</h1>
-        <p class="muted">Choose the type of account you want to create.</p>
+        <p class="muted">Choose the type of account you want to create. We’ll start with email and password, then verify the account and finish the first-time profile setup after sign in.</p>
         <div class="account-choices account-choices--stackable">
-          <button class="account-card account-card--client" data-view="onboard-client" data-stage="verify" type="button">
+          <button class="account-card account-card--client" data-view="onboard-client" data-stage="register" type="button">
             <span class="account-card-label">Client account</span>
             <strong>Create a client profile</strong>
             <small>Post jobs, review helpers, and manage payments.</small>
           </button>
-          <button class="account-card account-card--worker" data-view="onboard-worker" data-stage="verify" type="button">
+          <button class="account-card account-card--worker" data-view="onboard-worker" data-stage="register" type="button">
             <span class="account-card-label">Student account</span>
             <strong>Create a worker profile</strong>
             <small>Verify email, add your details, and start applying.</small>
@@ -1744,123 +1622,122 @@ function renderCreateAccount() {
 }
 
 function renderClientOnboarding() {
-  return routeMeta.stage === "details" ? renderClientDetailsForm() : renderClientVerificationScreen();
+  const client = getClient();
+  const stage =
+    routeMeta.stage ||
+    (!client.emailVerificationSentAt ? "register" : !client.emailVerifiedAt ? "verify" : !onboardingCompleted(client) ? "details" : "details");
+  if (stage === "register") return renderClientRegistrationScreen();
+  if (stage === "details") return renderClientDetailsForm();
+  return renderClientVerificationScreen();
 }
 
-function renderClientVerificationScreen() {
-  const client = getClient();
-  const verificationCode = client.emailVerificationCode || "";
-  const verificationSent = Boolean(client.emailVerificationSentAt);
-  const verified = Boolean(client.emailVerifiedAt);
-
+function renderClientRegistrationScreen() {
   return `
     <section class="form-page">
       <div class="section-heading">
         <p class="eyebrow">Client sign up</p>
-        <h1>Verify your email</h1>
+        <h1>Create your account</h1>
+        <p class="muted">Enter an email and password to get started. We’ll send a verification code right after you submit.</p>
       </div>
-      <div class="verification-layout verification-layout--vertical">
-        <form class="profile-form" id="clientOnboardingForm">
-          <div class="verification-card">
-            <h3>Email verification</h3>
-            <p>We will send an 8 digit code to this email. Enter it here to prove the address is real.</p>
-            <div class="verification-row">
-              <button class="secondary small" type="button" data-action="send-client-email-code">
-                ${verificationSent ? "Resend code" : "Send code"}
-              </button>
-              <span class="verification-email">${escapeHtml(client.email || "Email needed first")}</span>
-            </div>
-            <label>
-              <span>Email</span>
-              <input type="email" name="email" value="${escapeHtml(client.email)}" required />
-            </label>
-            <label>
-              <span>Verification code</span>
-              <input
-                type="text"
-                name="emailVerificationCode"
-                inputmode="numeric"
-                maxlength="8"
-                value="${escapeHtml(verificationCode)}"
-                placeholder="Enter the 8 digit code"
-                ${verificationSent ? "required" : ""}
-              />
-            </label>
-            <div class="verification-status ${verified ? "is-confirmed" : ""}">
-              ${verified ? "Email verified. You can continue to the profile." : verificationSent ? `Code sent to ${escapeHtml(client.email)}.` : "No code sent yet."}
-            </div>
-            <p class="verification-note">For this prototype, the code is shown here after it is generated.</p>
-            ${verificationSent ? `<div class="verification-code">${verificationCode}</div>` : ""}
+      <form class="profile-form" id="clientOnboardingForm" data-form="client-register">
+        <div class="verification-card">
+          <label>
+            <span>Email</span>
+            <input type="email" name="email" value="" placeholder="name@example.com" autocomplete="username" required />
+          </label>
+          ${passwordFieldMarkup("password", "Create password", "new-password")}
+          <div class="verification-status">
+            We’ll send a verification code after you submit this form.
           </div>
-          <div class="form-actions onboarding-actions">
-            <button class="ghost small" type="button" data-action="verify-client-email-code" ${verificationSent ? "" : "disabled"}>
-              Verify code
-            </button>
-            <button class="primary" type="button" data-action="continue-client-profile" ${verified ? "" : "disabled"}>
-              Continue to client profile
-            </button>
-          </div>
-        </form>
-        <aside class="trust-panel">
-          <h2>Why we verify</h2>
-          <p>Every account starts with a real email check so the profile stays tied to a real person.</p>
-        </aside>
-      </div>
+        </div>
+        <div class="form-actions onboarding-actions">
+          <button class="primary" type="submit">Submit</button>
+        </div>
+      </form>
     </section>
   `;
 }
 
-function isValidPersonName(value) {
-  const normalized = String(value || "").trim();
-  if (!normalized) return false;
-  return /^[\p{L}]+(?:[ -][\p{L}]+)*$/u.test(normalized);
-}
-
-function passwordFieldMarkup(name, label, autocomplete = "new-password") {
-  const fieldId = `field-${name}`;
-  return `
-    <label class="field" for="${fieldId}">
-      <span>${escapeHtml(label)}</span>
-      <div class="password-field">
-        <input id="${fieldId}" type="password" name="${escapeHtml(name)}" autocomplete="${escapeHtml(autocomplete)}" required />
-        <button
-          type="button"
-          class="password-toggle"
-          data-password-toggle="${escapeHtml(fieldId)}"
-          aria-controls="${fieldId}"
-          aria-pressed="false"
-          aria-label="Show password"
-        >
-          ${icon("eye")}
-        </button>
-      </div>
-    </label>
-  `;
-}
-
-function renderClientDetailsForm() {
+function renderClientVerificationScreen() {
   const client = getClient();
-  const isProfileEdit = routeMeta.mode === "edit";
   return `
     <section class="form-page">
       <div class="section-heading section-heading--with-actions">
         <div>
           <p class="eyebrow">Client sign up</p>
-          <h1>Set up a client profile</h1>
+          <h1>Verify your email</h1>
+          <p class="muted">A verification code has been sent to your email address. Please enter the code below to verify your account.</p>
+        </div>
+        <div class="section-actions">
+          <button class="secondary small" type="button" data-view="create-account">Back</button>
+        </div>
+      </div>
+      <div class="verification-layout verification-layout--vertical">
+        <form class="profile-form" id="clientOnboardingForm" data-form="client-verify">
+          <label>
+            <span>Verification code</span>
+            <input
+              type="text"
+              name="emailVerificationCode"
+              inputmode="numeric"
+              maxlength="8"
+              placeholder="Enter the 8 digit code"
+              required
+            />
+          </label>
+          <div class="verification-status ${client.emailVerifiedAt ? "is-confirmed" : ""}">
+            ${client.emailVerifiedAt ? "Email verified. Please sign in to continue." : "Enter the code you received by email."}
+          </div>
+          <div class="form-actions onboarding-actions verification-actions">
+            <button class="secondary small" type="button" data-action="send-client-email-code">Resend code</button>
+            <button class="primary" type="button" data-action="verify-client-email-code">Verify code</button>
+          </div>
+        </form>
+      </div>
+    </section>
+  `;
+}
+
+function ageRangeForWorker(age) {
+  const numericAge = Number(age || 0);
+  if (numericAge > 0 && numericAge < 18) return "Under 18";
+  if (numericAge >= 18 && numericAge <= 24) return "18-24";
+  if (numericAge >= 25 && numericAge <= 34) return "25-34";
+  if (numericAge >= 35 && numericAge <= 44) return "35-44";
+  if (numericAge >= 45 && numericAge <= 54) return "45-54";
+  if (numericAge >= 55 && numericAge <= 64) return "55-64";
+  return "65+";
+}
+
+function renderClientDetailsForm() {
+  const client = getClient();
+  const isProfileEdit = routeMeta.mode === "edit";
+  const onboarding = onboardingInfo(client);
+  return `
+    <section class="form-page">
+      <div class="section-heading section-heading--with-actions">
+        <div>
+          <p class="eyebrow">Client profile</p>
+          <h1>${isProfileEdit ? "Edit your profile" : "Finish your setup"}</h1>
+          <p class="muted">${isProfileEdit ? "Update the details below whenever you want." : "A few quick details help us match you with the right jobs."}</p>
         </div>
         <div class="section-actions">
           ${isProfileEdit ? `<button class="secondary small" type="button" data-action="back-from-profile-edit">Back</button>` : ""}
         </div>
       </div>
-      <form class="profile-form" id="clientOnboardingForm">
+      <form class="profile-form" id="clientOnboardingForm" data-form="client-details">
+        <div class="onboarding-progress" aria-hidden="true">
+          <span class="onboarding-progress__label">Step 2 of 2</span>
+          <div class="onboarding-progress__track"><span class="onboarding-progress__bar" style="width:100%"></span></div>
+        </div>
         <div class="form-grid onboarding-grid">
           <label>
-            <span>First name</span>
-            <input type="text" name="name" placeholder="Jordan Taylor" value="${routeMeta.mode === "edit" ? escapeHtml(client.name) : ""}" required />
+            <span>Preferred name</span>
+            <input type="text" name="name" placeholder="Jordan Taylor" value="${routeMeta.mode === "edit" ? escapeHtml(client.name) : escapeHtml(onboarding.preferredName || "")}" required />
           </label>
           <label>
             <span>Last name</span>
-            <input type="text" name="surname" value="${escapeHtml(client.surname || "")}" required />
+            <input type="text" name="surname" value="${escapeHtml(onboarding.surname || client.surname || "")}" required />
           </label>
           <label>
             <span>Email</span>
@@ -1871,26 +1748,32 @@ function renderClientDetailsForm() {
             <input type="tel" name="phone" value="${escapeHtml(client.phone || "")}" placeholder="Optional" />
           </label>
           <label>
-            <span>Location</span>
-            <input type="text" name="location" value="${escapeHtml(client.location)}" required />
+            <span>Postal code</span>
+            <input type="text" name="postalCode" value="${escapeHtml(userPostalCode(client))}" placeholder="Enter your postal code" required />
+          </label>
+          <label>
+            <span>Locality</span>
+            <input type="text" name="locality" value="${escapeHtml(client.location)}" placeholder="Detected from your postal code" required />
+          </label>
+          <label>
+            <span>Preferred currency</span>
+            <select name="preferredCurrency" required>${currencyOptions(client.preferredCurrency || "CHF")}</select>
           </label>
           <fieldset class="form-grid__full">
             <legend>What languages do you speak?</legend>
             <div class="check-grid">${languageCheckboxes(client.languages || client.language)}</div>
           </fieldset>
-          <label>
-            <span>Preferred currency</span>
-            <select name="preferredCurrency" required>${currencyOptions(client.preferredCurrency || "CHF")}</select>
-          </label>
-          ${passwordFieldMarkup("password", "Create password")}
-          ${passwordFieldMarkup("confirmPassword", "Confirm password")}
         </div>
         <fieldset>
           <legend>Services you are interested in</legend>
           <div class="check-grid">${serviceCheckboxes(client.typicalServices)}</div>
         </fieldset>
+        <label>
+          <span>About you</span>
+          <textarea name="about" rows="3" placeholder="Tell helpers a little about your household and what you need">${escapeHtml(onboarding.about || "")}</textarea>
+        </label>
         <div class="form-actions">
-          <button class="primary" type="submit">Save client profile</button>
+          <button class="primary" type="submit">${isProfileEdit ? "Save changes" : "Finish setup"}</button>
         </div>
       </form>
     </section>
@@ -1898,62 +1781,75 @@ function renderClientDetailsForm() {
 }
 
 function renderWorkerOnboarding() {
-  return routeMeta.stage === "details" ? renderWorkerDetailsForm() : renderWorkerVerificationScreen();
+  const worker = getWorker();
+  const stage =
+    routeMeta.stage ||
+    (!worker.emailVerificationSentAt ? "register" : !worker.emailVerifiedAt ? "verify" : !onboardingCompleted(worker) ? "details" : "details");
+  if (stage === "register") return renderWorkerRegistrationScreen();
+  if (stage === "details") return renderWorkerDetailsForm();
+  return renderWorkerVerificationScreen();
 }
 
-function renderWorkerVerificationScreen() {
-  const worker = getWorker();
-  const emailVerificationCode = worker.emailVerificationCode || "";
-  const emailVerificationSent = Boolean(worker.emailVerificationSentAt);
-  const allVerified = Boolean(worker.emailVerifiedAt);
-
+function renderWorkerRegistrationScreen() {
   return `
     <section class="form-page">
       <div class="section-heading">
         <p class="eyebrow">Student sign up</p>
-        <h1>Verify your email</h1>
+        <h1>Create your account</h1>
+        <p class="muted">Enter an email and password to get started. We’ll send a verification code right after you submit.</p>
+      </div>
+      <form class="profile-form" id="workerOnboardingForm" data-form="worker-register">
+        <div class="verification-card">
+          <label>
+            <span>Email</span>
+            <input type="email" name="email" value="" placeholder="name@example.com" autocomplete="username" required />
+          </label>
+          ${passwordFieldMarkup("password", "Create password", "new-password")}
+          <div class="verification-status">
+            We’ll send a verification code after you submit this form.
+          </div>
+        </div>
+        <div class="form-actions onboarding-actions">
+          <button class="primary" type="submit">Submit</button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
+function renderWorkerVerificationScreen() {
+  const worker = getWorker();
+  return `
+    <section class="form-page">
+      <div class="section-heading section-heading--with-actions">
+        <div>
+          <p class="eyebrow">Student sign up</p>
+          <h1>Verify your email</h1>
+          <p class="muted">A verification code has been sent to your email address. Please enter the code below to verify your account.</p>
+        </div>
+        <div class="section-actions">
+          <button class="secondary small" type="button" data-view="create-account">Back</button>
+        </div>
       </div>
       <div class="verification-layout verification-layout--vertical">
-        <form class="profile-form" id="workerOnboardingForm">
-          <div class="verification-card">
-            <h3>Student email verification</h3>
-            <p>We will send an 8 digit code to this student email. Enter it here to prove the address is real.</p>
-            <div class="verification-row">
-              <button class="secondary small" type="button" data-action="send-worker-email-code">
-                ${emailVerificationSent ? "Resend code" : "Send code"}
-              </button>
-              <span class="verification-email">${escapeHtml(worker.email || "Email needed first")}</span>
-            </div>
-            <label>
-              <span>Email</span>
-              <input type="email" name="email" value="${escapeHtml(worker.email)}" required />
-            </label>
-            <label>
-              <span>Verification code</span>
-              <input
-                type="text"
-                name="emailVerificationCode"
-                inputmode="numeric"
-                maxlength="8"
-                value="${escapeHtml(emailVerificationCode)}"
-                placeholder="Enter the 8 digit code"
-                ${emailVerificationSent ? "required" : ""}
-              />
-            </label>
-            <div class="verification-status ${worker.emailVerifiedAt ? "is-confirmed" : ""}">
-              ${worker.emailVerifiedAt ? "Email verified." : emailVerificationSent ? `Code sent to ${escapeHtml(worker.email)}.` : "No code sent yet."}
-            </div>
-            <p class="verification-note">For this prototype, the code is shown here after it is generated.</p>
-            ${emailVerificationSent ? `<div class="verification-code">${emailVerificationCode}</div>` : ""}
+        <form class="profile-form" id="workerOnboardingForm" data-form="worker-verify">
+          <label>
+            <span>Verification code</span>
+            <input
+              type="text"
+              name="emailVerificationCode"
+              inputmode="numeric"
+              maxlength="8"
+              placeholder="Enter the 8 digit code"
+              required
+            />
+          </label>
+          <div class="verification-status ${worker.emailVerifiedAt ? "is-confirmed" : ""}">
+            ${worker.emailVerifiedAt ? "Email verified. Please sign in to continue." : "Enter the code you received by email."}
           </div>
-
-          <div class="form-actions onboarding-actions">
-            <button class="ghost small" type="button" data-action="verify-worker-email-code" ${emailVerificationSent ? "" : "disabled"}>
-              Verify student email
-            </button>
-            <button class="primary" type="button" data-action="continue-worker-profile" ${allVerified ? "" : "disabled"}>
-              Continue to student profile
-            </button>
+          <div class="form-actions onboarding-actions verification-actions">
+            <button class="secondary small" type="button" data-action="send-worker-email-code">Resend code</button>
+            <button class="primary" type="button" data-action="verify-worker-email-code">Verify code</button>
           </div>
         </form>
       </div>
@@ -1964,18 +1860,24 @@ function renderWorkerVerificationScreen() {
 function renderWorkerDetailsForm() {
   const worker = getWorker();
   const isProfileEdit = routeMeta.mode === "edit";
+  const onboarding = onboardingInfo(worker);
   return `
     <section class="form-page">
       <div class="section-heading section-heading--with-actions">
         <div>
-          <p class="eyebrow">Student sign up</p>
-          <h1>Create a student profile</h1>
+          <p class="eyebrow">Student profile</p>
+          <h1>${isProfileEdit ? "Edit your profile" : "Finish your setup"}</h1>
+          <p class="muted">${isProfileEdit ? "Update the details below whenever you want." : "A few quick details help us match you with the right jobs."}</p>
         </div>
         <div class="section-actions">
           ${isProfileEdit ? `<button class="secondary small" type="button" data-action="back-from-profile-edit">Back</button>` : ""}
         </div>
       </div>
-      <form class="profile-form" id="workerOnboardingForm">
+      <form class="profile-form" id="workerOnboardingForm" data-form="worker-details">
+        <div class="onboarding-progress" aria-hidden="true">
+          <span class="onboarding-progress__label">Step 2 of 2</span>
+          <div class="onboarding-progress__track"><span class="onboarding-progress__bar" style="width:100%"></span></div>
+        </div>
         <div class="worker-profile-row">
           <div class="photo-uploader">
             ${renderAvatar(worker, "large")}
@@ -1986,12 +1888,15 @@ function renderWorkerDetailsForm() {
           </div>
           <div class="form-grid onboarding-grid">
             <label>
-              <span>First name</span>
-              <input type="text" name="name" placeholder="Jordan Taylor" value="${routeMeta.mode === "edit" ? escapeHtml(worker.name) : ""}" required />
+              <span>Preferred name</span>
+              <input type="text" name="name" placeholder="Jordan Taylor" value="${routeMeta.mode === "edit" ? escapeHtml(worker.name) : escapeHtml(onboarding.preferredName || "")}" required />
             </label>
             <label>
-              <span>Last name</span>
-              <input type="text" name="surname" value="${escapeHtml(worker.surname || "")}" required />
+              <span>Age range</span>
+              <select name="ageRange" required>
+                <option value="">Choose one</option>
+                ${AGE_RANGE_OPTIONS.map((option) => `<option value="${escapeHtml(option.value)}" ${String(onboarding.ageRange || ageRangeForWorker(worker.age)) === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+              </select>
             </label>
             <label>
               <span>Email</span>
@@ -2002,23 +1907,17 @@ function renderWorkerDetailsForm() {
               <input type="tel" name="phone" value="${escapeHtml(worker.phone || "")}" placeholder="Optional" />
             </label>
             <label>
-              <span>Age</span>
-              <input type="number" name="age" value="${escapeHtml(worker.age)}" min="13" max="18" required />
+              <span>Postal code</span>
+              <input type="text" name="postalCode" value="${escapeHtml(userPostalCode(worker))}" placeholder="Enter your postal code" required />
             </label>
             <label>
-              <span>Location</span>
-              <input type="text" name="location" value="${escapeHtml(worker.location)}" required />
-            </label>
-            <label>
-              <span>School</span>
-              <input type="text" name="school" value="${escapeHtml(worker.school)}" required />
+              <span>Locality</span>
+              <input type="text" name="locality" value="${escapeHtml(worker.location)}" placeholder="Detected from your postal code" required />
             </label>
             <fieldset class="form-grid__full">
               <legend>What languages do you speak?</legend>
               <div class="check-grid">${languageCheckboxes(worker.languages || worker.language)}</div>
             </fieldset>
-            ${passwordFieldMarkup("password", "Create password")}
-            ${passwordFieldMarkup("confirmPassword", "Confirm password")}
           </div>
         </div>
         <label>
@@ -2045,7 +1944,7 @@ function renderWorkerDetailsForm() {
           <input type="text" name="certifications" value="${escapeHtml(worker.certifications.join(", "))}" required />
         </label>
         <div class="form-actions">
-          <button class="primary" type="submit">Save student profile</button>
+          <button class="primary" type="submit">${isProfileEdit ? "Save changes" : "Finish setup"}</button>
         </div>
       </form>
     </section>
@@ -2725,7 +2624,7 @@ function bindCommonEvents() {
       if (button.dataset.role) meta.role = button.dataset.role;
       if (button.dataset.stage) meta.stage = button.dataset.stage;
       if (button.dataset.mode) meta.mode = button.dataset.mode;
-      if (!meta.stage && String(next || "").startsWith("onboard-")) meta.stage = "verify";
+      if (!meta.stage && String(next || "").startsWith("onboard-")) meta.stage = "register";
       navigate(next, meta);
     });
   });
@@ -2779,15 +2678,25 @@ function bindCommonEvents() {
     });
   });
 
-  document.querySelectorAll("[data-action='open-demo-client']").forEach((button) => {
+  document.querySelectorAll("[data-action='open-client-profile']").forEach((button) => {
     button.addEventListener("click", () => {
-      signInAsDemoAccount("client");
+      const session = readSession();
+      if (session?.role === "client") {
+        navigate("client-dashboard");
+        return;
+      }
+      navigate("login", { role: "client", loginNotice: "Sign in to view your client profile." });
     });
   });
 
-  document.querySelectorAll("[data-action='open-demo-worker']").forEach((button) => {
+  document.querySelectorAll("[data-action='open-worker-profile']").forEach((button) => {
     button.addEventListener("click", () => {
-      signInAsDemoAccount("worker");
+      const session = readSession();
+      if (session?.role === "worker") {
+        navigate("worker-dashboard");
+        return;
+      }
+      navigate("login", { role: "worker", loginNotice: "Sign in to view your student profile." });
     });
   });
 
@@ -2883,13 +2792,15 @@ function bindLogin() {
   document.querySelector("#loginForm").addEventListener("submit", (event) => {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
-    const email = formData.get("email").trim();
-    const password = formData.get("password");
-    const user =
-      Object.values(state.clients).find((item) => item.email.toLowerCase() === email.toLowerCase()) ||
-      Object.values(state.workers).find((item) => item.email.toLowerCase() === email.toLowerCase());
+    const email = String(formData.get("email") || "").trim();
+    const password = String(formData.get("password") || "");
+    const user = findUserByEmail(email);
     if (!user) {
       showFormError(event.currentTarget, "We could not find that email.");
+      return;
+    }
+    if (accountNeedsVerification(user)) {
+      showFormError(event.currentTarget, "Please verify your email before signing in.");
       return;
     }
 
@@ -2899,10 +2810,13 @@ function bindLogin() {
       return;
     }
 
-    const role = state.clients[user.id] ? "client" : "worker";
+    const role = accountRoleForUser(user);
     writeSession({ role, id: user.id });
-    if (role === "worker") navigate("worker-dashboard");
-    else navigate("client-dashboard");
+    if (requiresOnboarding(user)) {
+      navigate(role === "worker" ? "onboard-worker" : "onboard-client", { stage: "details" });
+      return;
+    }
+    navigate(role === "worker" ? "worker-dashboard" : "client-dashboard");
   });
 }
 
@@ -2979,83 +2893,112 @@ function bindForgotPassword() {
 function bindClientOnboarding() {
   const form = document.querySelector("#clientOnboardingForm");
   if (!form) return;
-  const stage = routeMeta.stage || "verify";
+  const stage = routeMeta.stage || (form.dataset.form === "client-register" ? "register" : form.dataset.form === "client-details" ? "details" : "verify");
   const client = getClient();
 
-  const syncDraftClient = (formData) => {
-    const nextEmail = String(formData.get("email") || "").trim();
-    if (client.email !== nextEmail) {
+  const setEmailFromForm = (formData) => {
+    const nextEmail = normalizeEmail(formData.get("email"));
+    if (nextEmail && client.email !== nextEmail) {
       client.emailVerificationCode = "";
       client.emailVerificationSentAt = "";
       client.emailVerifiedAt = "";
     }
-    client.email = nextEmail || client.email;
-    if (stage === "details") {
-      client.name = formData.get("name").trim();
-      client.phone = formData.get("phone").trim();
-      client.location = formData.get("location").trim();
-      client.languages = normalizeLanguages(formData.getAll("languages"));
-      client.language = languageDisplay(client.languages);
-      client.preferredCurrency = formData.get("preferredCurrency");
-      client.typicalServices = formData.getAll("services");
-    }
+    if (nextEmail) client.email = nextEmail;
     return client;
   };
 
-  const sendCodeButton = document.querySelector("[data-action='send-client-email-code']");
-  if (sendCodeButton) {
-    sendCodeButton.addEventListener("click", () => {
+  if (stage === "register") {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
       const formData = new FormData(form);
-      const draft = syncDraftClient(formData);
-      if (!draft.email) {
+      const email = normalizeEmail(formData.get("email"));
+      const password = String(formData.get("password") || "");
+      if (!email) {
         showFormError(form, "Please add the email first.");
         return;
       }
+      if (password.length < 8) {
+        showFormError(form, "Please make your password at least 8 characters long.");
+        return;
+      }
+      const existing = findUserByEmail(email);
+      if (existing && accountRoleForUser(existing) !== "client") {
+        showFormError(form, "That email is already used for a different account.");
+        return;
+      }
+      if (existing && existing.emailVerifiedAt) {
+        showFormError(form, "That email already has a verified account. Please sign in.");
+        return;
+      }
+      const draft = existing || createSignupRecord("client", email, password);
+      draft.email = email;
+      Object.assign(draft, passwordRecord(password));
       draft.emailVerificationCode = generateVerificationCode();
       draft.emailVerificationSentAt = new Date().toISOString();
       draft.emailVerifiedAt = "";
       saveState();
-      render();
-    });
-  }
-
-  const verifyCodeButton = document.querySelector("[data-action='verify-client-email-code']");
-  if (verifyCodeButton) {
-    verifyCodeButton.addEventListener("click", () => {
-      const formData = new FormData(form);
-      const draft = syncDraftClient(formData);
-      const code = String(formData.get("emailVerificationCode") || "").trim();
-      if (!draft.emailVerificationCode) {
-        showFormError(form, "Send the email code first.");
+      try {
+        await sendVerificationEmail({ to: email, code: draft.emailVerificationCode, role: "client" });
+      } catch (error) {
+        showFormError(form, error.message || "We could not send the verification email.");
         return;
       }
-      if (code !== draft.emailVerificationCode) {
-        showFormError(form, "That email code does not match.");
-        return;
-      }
-      draft.emailVerifiedAt = new Date().toISOString();
-      saveState();
-      render();
+      navigate("onboard-client", { stage: "verify", email });
     });
+    return;
   }
 
-  const continueButton = document.querySelector("[data-action='continue-client-profile']");
-  if (continueButton) {
-    continueButton.addEventListener("click", () => {
-      const formData = new FormData(form);
-      const draft = syncDraftClient(formData);
-      if (!draft.emailVerifiedAt) {
-        showFormError(form, "Verify the email before continuing.");
-        return;
-      }
-      routeMeta = { ...routeMeta, stage: "details" };
-      render();
-    });
+  if (stage === "verify") {
+    const sendCodeButton = document.querySelector("[data-action='send-client-email-code']");
+    if (sendCodeButton) {
+      sendCodeButton.addEventListener("click", async () => {
+        const draft = setEmailFromForm(new FormData(form));
+        if (!draft.email) {
+          showFormError(form, "Please add the email first.");
+          return;
+        }
+        draft.emailVerificationCode = generateVerificationCode();
+        draft.emailVerificationSentAt = new Date().toISOString();
+        draft.emailVerifiedAt = "";
+        saveState();
+        try {
+          await sendVerificationEmail({ to: draft.email, code: draft.emailVerificationCode, role: "client" });
+        } catch (error) {
+          showFormError(form, error.message || "We could not send the verification email.");
+          return;
+        }
+        render();
+      });
+    }
+
+    const verifyCodeButton = document.querySelector("[data-action='verify-client-email-code']");
+    if (verifyCodeButton) {
+      verifyCodeButton.addEventListener("click", () => {
+        const formData = new FormData(form);
+        const draft = setEmailFromForm(formData);
+        const code = String(formData.get("emailVerificationCode") || "").trim();
+        if (!draft.emailVerificationCode) {
+          showFormError(form, "Send the email code first.");
+          return;
+        }
+        if (isEmailVerificationExpired(draft.emailVerificationSentAt)) {
+          showFormError(form, "That verification code has expired. Please send a new one.");
+          return;
+        }
+        if (code !== draft.emailVerificationCode) {
+          showFormError(form, "That email code does not match.");
+          return;
+        }
+        draft.emailVerifiedAt = new Date().toISOString();
+        draft.emailVerificationCode = "";
+        saveState();
+        navigate("login", { loginNotice: "Account verified. Please sign in." });
+      });
+    }
+    return;
   }
 
-  if (stage !== "details") return;
-
-  form.addEventListener("submit", (event) => {
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const formData = new FormData(form);
     const services = formData.getAll("services");
@@ -3068,35 +3011,56 @@ function bindClientOnboarding() {
       showFormError(form, "Please choose at least one language.");
       return;
     }
-
-    const password = String(formData.get("password") || "");
-    const confirmPassword = String(formData.get("confirmPassword") || "");
-    if (password.length < 8) {
-      showFormError(form, "Please make your password at least 8 characters long.");
+    const draft = setEmailFromForm(formData);
+    const postalCode = sanitizeOnboardingText(formData.get("postalCode"));
+    let locality = sanitizeOnboardingText(formData.get("locality"));
+    if (!locality && postalCode) {
+      locality = await lookupLocalityFromPostalCode(postalCode);
+    }
+    if (!locality) {
+      showFormError(form, "Please enter a valid postal code so we can detect your locality.");
       return;
     }
-    if (password !== confirmPassword) {
-      showFormError(form, "Your password entries do not match.");
+    const preferredName = sanitizeOnboardingText(formData.get("name"));
+    const surname = sanitizeOnboardingText(formData.get("surname"));
+    if (!isValidPersonName(preferredName) || !isValidPersonName(surname)) {
+      showFormError(form, "Please enter a valid name. Names can only contain letters, spaces, and hyphens (-).");
       return;
     }
-
-    const draft = syncDraftClient(formData);
-    if (!draft.emailVerifiedAt) {
-      showFormError(form, "Please verify the email address before saving the client profile.");
-      return;
-    }
-
-    Object.assign(draft, passwordRecord(password));
+    draft.name = `${preferredName} ${surname}`.trim();
+    draft.phone = sanitizeOnboardingText(formData.get("phone"));
+    draft.location = locality;
+    draft.preferredCurrency = String(formData.get("preferredCurrency") || "CHF");
+    draft.languages = normalizeLanguages(formData.getAll("languages"));
+    draft.language = languageDisplay(draft.languages);
+    draft.typicalServices = formData.getAll("services");
+    setOnboardingComplete(draft, {
+      preferredName,
+      surname,
+      postalCode,
+      locality,
+      about: sanitizeOnboardingText(formData.get("about")),
+      languages: draft.languages,
+      interests: draft.typicalServices,
+      preferredCurrency: draft.preferredCurrency
+    });
     saveState();
-    writeSession({ role: "client", id: draft.id });
-    navigate("client-dashboard");
+    const session = readSession();
+    if (session?.role === "client" && session.id === draft.id) {
+      navigate("client-dashboard");
+    } else if (routeMeta.mode === "edit") {
+      navigate("client-dashboard");
+    } else {
+      writeSession({ role: "client", id: draft.id });
+      navigate("client-dashboard");
+    }
   });
 }
 
 function bindWorkerOnboarding() {
   const form = document.querySelector("#workerOnboardingForm");
   if (!form) return;
-  const stage = routeMeta.stage || "verify";
+  const stage = routeMeta.stage || (form.dataset.form === "worker-register" ? "register" : form.dataset.form === "worker-details" ? "details" : "verify");
   const photoInput = document.querySelector("#photoInput");
   const preview = document.querySelector(".photo-uploader img");
   const worker = getWorker();
@@ -3105,91 +3069,106 @@ function bindWorkerOnboarding() {
   const customServiceInput = document.querySelector("textarea[name='customService']");
 
   const syncDraftWorker = (formData) => {
-    const nextEmail = String(formData.get("email") || "").trim();
-    if (worker.email !== nextEmail) {
+    const nextEmail = normalizeEmail(formData.get("email"));
+    if (nextEmail && worker.email !== nextEmail) {
       worker.emailVerificationCode = "";
       worker.emailVerificationSentAt = "";
       worker.emailVerifiedAt = "";
     }
-    worker.email = nextEmail || worker.email;
-    if (stage === "details") {
-      worker.name = formData.get("name").trim();
-      worker.phone = formData.get("phone").trim();
-      worker.age = Number(formData.get("age"));
-      worker.location = formData.get("location").trim();
-      worker.school = formData.get("school").trim();
-      worker.languages = normalizeLanguages(formData.getAll("languages"));
-      worker.language = languageDisplay(worker.languages);
-      worker.bio = formData.get("bio").trim();
-      worker.services = formData
-        .getAll("services")
-        .filter((service) => service !== "__other__")
-        .concat(
-          formData
-            .get("customService")
-            .split(/[,\n]/)
-            .map((item) => item.trim())
-            .filter(Boolean)
-        )
-        .filter((item, index, list) => list.indexOf(item) === index);
-      worker.certifications = formData
-        .get("certifications")
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
-    }
+    if (nextEmail) worker.email = nextEmail;
     return worker;
   };
 
-  const sendWorkerEmailCode = () => {
-    const draft = syncDraftWorker(new FormData(form));
-    if (!draft.email) {
-      showFormError(form, "Please add the student email first.");
-      return;
-    }
-    draft.emailVerificationCode = generateVerificationCode();
-    draft.emailVerificationSentAt = new Date().toISOString();
-    draft.emailVerifiedAt = "";
-    saveState();
-    render();
-  };
-
-  const verifyWorkerEmailCode = () => {
-    const formData = new FormData(form);
-    const draft = syncDraftWorker(formData);
-    const code = String(formData.get("emailVerificationCode") || "").trim();
-    if (!draft.emailVerificationCode) {
-      showFormError(form, "Send the student email code first.");
-      return;
-    }
-    if (code !== draft.emailVerificationCode) {
-      showFormError(form, "That student email code does not match.");
-      return;
-    }
-    draft.emailVerifiedAt = new Date().toISOString();
-    saveState();
-    render();
-  };
-
-  const continueButton = document.querySelector("[data-action='continue-worker-profile']");
-  if (continueButton) {
-    continueButton.addEventListener("click", () => {
-      const draft = syncDraftWorker(new FormData(form));
-      if (!draft.emailVerifiedAt) {
-        showFormError(form, "Verify the student email before continuing.");
+  if (stage === "register") {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const formData = new FormData(form);
+      const email = normalizeEmail(formData.get("email"));
+      const password = String(formData.get("password") || "");
+      if (!email) {
+        showFormError(form, "Please add the student email first.");
         return;
       }
-      routeMeta = { ...routeMeta, stage: "details" };
-      render();
+      if (password.length < 8) {
+        showFormError(form, "Please make your password at least 8 characters long.");
+        return;
+      }
+      const existing = findUserByEmail(email);
+      if (existing && accountRoleForUser(existing) !== "worker") {
+        showFormError(form, "That email is already used for a different account.");
+        return;
+      }
+      if (existing && existing.emailVerifiedAt) {
+        showFormError(form, "That email already has a verified account. Please sign in.");
+        return;
+      }
+      const draft = existing || createSignupRecord("worker", email, password);
+      draft.email = email;
+      Object.assign(draft, passwordRecord(password));
+      draft.emailVerificationCode = generateVerificationCode();
+      draft.emailVerificationSentAt = new Date().toISOString();
+      draft.emailVerifiedAt = "";
+      saveState();
+      try {
+        await sendVerificationEmail({ to: email, code: draft.emailVerificationCode, role: "worker" });
+      } catch (error) {
+        showFormError(form, error.message || "We could not send the verification email.");
+        return;
+      }
+      navigate("onboard-worker", { stage: "verify", email });
     });
+    return;
   }
 
-  const sendWorkerEmailButton = document.querySelector("[data-action='send-worker-email-code']");
-  if (sendWorkerEmailButton) sendWorkerEmailButton.addEventListener("click", sendWorkerEmailCode);
-  const verifyWorkerEmailButton = document.querySelector("[data-action='verify-worker-email-code']");
-  if (verifyWorkerEmailButton) verifyWorkerEmailButton.addEventListener("click", verifyWorkerEmailCode);
+  if (stage === "verify") {
+    const sendWorkerEmailButton = document.querySelector("[data-action='send-worker-email-code']");
+    if (sendWorkerEmailButton) {
+      sendWorkerEmailButton.addEventListener("click", async () => {
+        const draft = syncDraftWorker(new FormData(form));
+        if (!draft.email) {
+          showFormError(form, "Please add the student email first.");
+          return;
+        }
+        draft.emailVerificationCode = generateVerificationCode();
+        draft.emailVerificationSentAt = new Date().toISOString();
+        draft.emailVerifiedAt = "";
+        saveState();
+        try {
+          await sendVerificationEmail({ to: draft.email, code: draft.emailVerificationCode, role: "worker" });
+        } catch (error) {
+          showFormError(form, error.message || "We could not send the verification email.");
+          return;
+        }
+        render();
+      });
+    }
 
-  if (stage !== "details") return;
+    const verifyWorkerEmailButton = document.querySelector("[data-action='verify-worker-email-code']");
+    if (verifyWorkerEmailButton) {
+      verifyWorkerEmailButton.addEventListener("click", () => {
+        const formData = new FormData(form);
+        const draft = syncDraftWorker(formData);
+        const code = String(formData.get("emailVerificationCode") || "").trim();
+        if (!draft.emailVerificationCode) {
+          showFormError(form, "Send the student email code first.");
+          return;
+        }
+        if (isEmailVerificationExpired(draft.emailVerificationSentAt)) {
+          showFormError(form, "That verification code has expired. Please send a new one.");
+          return;
+        }
+        if (code !== draft.emailVerificationCode) {
+          showFormError(form, "That student email code does not match.");
+          return;
+        }
+        draft.emailVerifiedAt = new Date().toISOString();
+        draft.emailVerificationCode = "";
+        saveState();
+        navigate("login", { loginNotice: "Account verified. Please sign in." });
+      });
+    }
+    return;
+  }
 
   const toggleCustomServiceCard = () => {
     if (!customServiceCard) return;
@@ -3218,14 +3197,9 @@ function bindWorkerOnboarding() {
     });
   }
 
-  form.addEventListener("submit", (event) => {
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const formData = new FormData(form);
-    const age = Number(formData.get("age"));
-    if (age > 18) {
-      showFormError(form, "Student work accounts are for students 18 and under. Please enter an age from 13 to 18.");
-      return;
-    }
     const languagesSelected = formData.getAll("languages");
     if (!languagesSelected.length) {
       showFormError(form, "Please choose at least one language.");
@@ -3239,33 +3213,79 @@ function bindWorkerOnboarding() {
     }
 
     const draft = syncDraftWorker(formData);
-    if (!draft.services.length) {
-      showFormError(form, "Please choose at least one service or write one in More.");
+    const ageRange = String(formData.get("ageRange") || "");
+    if (!ageRange) {
+      showFormError(form, "Please choose your age range.");
       return;
     }
-
+    const ageMap = {
+      "Under 18": 17,
+      "18-24": 18,
+      "25-34": 25,
+      "35-44": 35,
+      "45-54": 45,
+      "55-64": 55,
+      "65+": 65
+    };
+    const postalCode = sanitizeOnboardingText(formData.get("postalCode"));
+    let locality = sanitizeOnboardingText(formData.get("locality"));
+    if (!locality && postalCode) {
+      locality = await lookupLocalityFromPostalCode(postalCode);
+    }
+    if (!locality) {
+      showFormError(form, "Please enter a valid postal code so we can detect your locality.");
+      return;
+    }
     if (!draft.emailVerifiedAt) {
       showFormError(form, "Please finish email verification before saving the account.");
       return;
     }
-
-    const password = String(formData.get("password") || "");
-    const confirmPassword = String(formData.get("confirmPassword") || "");
-    if (password.length < 8) {
-      showFormError(form, "Please make your password at least 8 characters long.");
-      return;
-    }
-    if (password !== confirmPassword) {
-      showFormError(form, "Your password entries do not match.");
+    if (!draft.services.length && !selectedServices.length) {
+      showFormError(form, "Please choose at least one service or write one in More.");
       return;
     }
 
     const file = photoInput?.files?.[0];
     const commitWorker = (photo) => {
-      Object.assign(draft, passwordRecord(password));
+      draft.name = sanitizeOnboardingText(formData.get("name"));
+      draft.phone = sanitizeOnboardingText(formData.get("phone"));
+      draft.age = ageMap[ageRange] || 17;
+      draft.location = locality;
+      draft.school = sanitizeOnboardingText(formData.get("school"));
+      draft.language = languageDisplay(normalizeLanguages(formData.getAll("languages")));
+      draft.languages = normalizeLanguages(formData.getAll("languages"));
+      draft.bio = sanitizeOnboardingText(formData.get("bio"));
+      draft.services = formData
+        .getAll("services")
+        .filter((service) => service !== "__other__")
+        .concat(
+          formData
+            .get("customService")
+            .split(/[,\n]/)
+            .map((item) => item.trim())
+            .filter(Boolean)
+        )
+        .filter((item, index, list) => list.indexOf(item) === index);
+      draft.certifications = formData
+        .get("certifications")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
       if (photo) draft.photo = photo;
+      setOnboardingComplete(draft, {
+        preferredName: draft.name,
+        ageRange,
+        postalCode,
+        locality,
+        languages: draft.languages,
+        interests: draft.services,
+        about: draft.bio
+      });
       saveState();
-      writeSession({ role: "worker", id: draft.id });
+      const session = readSession();
+      if (session?.role !== "worker" || session.id !== draft.id) {
+        writeSession({ role: "worker", id: draft.id });
+      }
       navigate("worker-dashboard");
     };
 
