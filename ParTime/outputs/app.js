@@ -181,6 +181,35 @@ function sanitizeOnboardingText(value) {
   return String(value || "").trim();
 }
 
+function isValidPersonName(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return false;
+  return /^[\p{L}]+(?:[ -][\p{L}]+)*$/u.test(normalized);
+}
+
+function icon(name) {
+  const icons = {
+    eye: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.25 12s3.5-6.75 9.75-6.75S21.75 12 21.75 12 18.25 18.75 12 18.75 2.25 12 2.25 12Z"></path><circle cx="12" cy="12" r="2.75"></circle></svg>`,
+    "eye-off": `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18"></path><path d="M10.58 10.58a2 2 0 0 0 2.84 2.84"></path><path d="M9.88 5.47A9.6 9.6 0 0 1 12 5.25C18.25 5.25 21.75 12 21.75 12a15.4 15.4 0 0 1-3.12 4.05"></path><path d="M6.53 6.53C3.78 8.36 2.25 12 2.25 12S5.75 18.75 12 18.75a9.7 9.7 0 0 0 4.13-.9"></path></svg>`
+  };
+  return icons[name] || "";
+}
+
+function passwordFieldMarkup(name, label, autocomplete = "new-password") {
+  const fieldId = `field-${name}`;
+  return `
+    <label class="field" for="${fieldId}">
+      <span>${escapeHtml(label)}</span>
+      <div class="password-field">
+        <input id="${fieldId}" type="password" name="${escapeHtml(name)}" autocomplete="${escapeHtml(autocomplete)}" placeholder="At least 8 characters" required />
+        <button class="password-toggle" type="button" data-password-toggle="${fieldId}" aria-label="Show password" aria-pressed="false">
+          ${icon("eye")}
+        </button>
+      </div>
+    </label>
+  `;
+}
+
 function userPostalCode(user) {
   return onboardingInfo(user).postalCode || "";
 }
@@ -3559,6 +3588,7 @@ async function bootstrap() {
   state = (await loadState()) || createDefaultState();
   applyRouteFromLocation(true);
   const session = readSession();
+  const publicViews = new Set(["landing", "login", "create-account", "forgot-password", "onboard-client", "onboard-worker", "messages"]);
   if (view === "messages" && !session) {
     // keep the deep-link page visible without exposing chat data
   } else if (session) {
@@ -3578,10 +3608,8 @@ async function bootstrap() {
       clearSession();
       if (view !== "messages") view = "login";
     }
-  } else {
-    if (view !== "messages") {
-      view = "landing";
-    }
+  } else if (!publicViews.has(view)) {
+    view = "landing";
   }
 
   window.addEventListener("popstate", () => {
