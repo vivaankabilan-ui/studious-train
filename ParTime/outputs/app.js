@@ -3,7 +3,7 @@ const TODAY = "2026-07-04";
 
 const categories = [
   "Lawn Care",
-  "Pet Sitting",
+  "Pet Care",
   "Tutoring",
   "Errands",
   "Tech Help",
@@ -12,12 +12,8 @@ const categories = [
 ];
 
 const currencies = [
-  { code: "USD", label: "USD - US Dollar" },
-  { code: "EUR", label: "EUR - Euro" },
-  { code: "GBP", label: "GBP - Pound" },
   { code: "CHF", label: "CHF - Swiss Franc" },
-  { code: "CAD", label: "CAD - Canadian Dollar" },
-  { code: "AUD", label: "AUD - Australian Dollar" }
+  { code: "EUR", label: "EUR - Euro" }
 ];
 
 const languages = ["English", "Spanish", "French", "German", "Mandarin", "Hindi", "Arabic", "Portuguese", "Other"];
@@ -52,6 +48,10 @@ let profileModalWorkerId = "";
 let logoMenuOpen = false;
 let clientNotificationsOpen = false;
 let workerNotificationsOpen = false;
+let messagesPollingTimer = null;
+let messageDrafts = Object.create(null);
+let messageSendBusy = false;
+let messageSendError = "";
 let saveQueue = Promise.resolve();
 
 function stateTimestamp(candidate) {
@@ -66,8 +66,9 @@ function stateSize(candidate) {
   const jobs = Array.isArray(candidate.jobs) ? candidate.jobs.length : 0;
   const clients = candidate.clients ? Object.keys(candidate.clients).length : 0;
   const workers = candidate.workers ? Object.keys(candidate.workers).length : 0;
-  const parents = candidate.parents ? Object.keys(candidate.parents).length : 0;
-  return jobs + clients + workers + parents;
+  const conversations = Array.isArray(candidate.conversations) ? candidate.conversations.length : 0;
+  const messages = Array.isArray(candidate.messages) ? candidate.messages.length : 0;
+  return jobs + clients + workers + conversations + messages;
 }
 
 function chooseBestState(remoteState, localState) {
@@ -127,63 +128,26 @@ function generateVerificationCode() {
   return String(Math.floor(Math.random() * 100000000)).padStart(8, "0");
 }
 
-function isValidPersonName(value) {
-  const normalized = String(value || "").trim();
-  if (!normalized) return false;
-  return /^[\p{L}]+(?:[ -][\p{L}]+)*$/u.test(normalized);
-}
-
-function passwordFieldMarkup(name, label, autocomplete = "new-password") {
-  const fieldId = `field-${name}`;
-  return `
-    <label class="field" for="${fieldId}">
-      <span>${escapeHtml(label)}</span>
-      <div class="password-field">
-        <input id="${fieldId}" type="password" name="${escapeHtml(name)}" autocomplete="${escapeHtml(autocomplete)}" required />
-        <button
-          type="button"
-          class="password-toggle"
-          data-password-toggle="${escapeHtml(fieldId)}"
-          aria-controls="${fieldId}"
-          aria-pressed="false"
-          aria-label="Show password"
-        >
-          ${icon("eye")}
-        </button>
-      </div>
-    </label>
-  `;
-}
-
-function clearFieldErrors(form) {
-  form.querySelectorAll(".field-error").forEach((field) => {
-    field.classList.remove("field-error");
-    field.removeAttribute("aria-invalid");
-  });
-}
-
-function addFieldError(form, fieldName) {
-  if (!fieldName) return;
-  const fields = Array.from(form.querySelectorAll(`[name="${CSS.escape(fieldName)}"]`));
-  fields.forEach((field) => {
-    field.classList.add("field-error");
-    field.setAttribute("aria-invalid", "true");
-  });
-}
-
-function sanitizeOnboardingText(value) {
-  return String(value || "").trim();
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 function findUserByEmail(email) {
-  const normalized = String(email || "").trim().toLowerCase();
+  const normalized = normalizeEmail(email);
   if (!normalized) return null;
   return (
-    Object.values(state.clients).find((item) => item.email.toLowerCase() === normalized) ||
-    Object.values(state.workers).find((item) => item.email.toLowerCase() === normalized) ||
-    Object.values(state.parents).find((item) => item.email.toLowerCase() === normalized) ||
+    Object.values(state.clients).find((item) => normalizeEmail(item.email) === normalized) ||
+    Object.values(state.workers).find((item) => normalizeEmail(item.email) === normalized) ||
+    Object.values(state.parents).find((item) => normalizeEmail(item.email) === normalized) ||
     null
   );
+}
+
+function accountRoleForUser(user) {
+  if (!user) return "client";
+  if (state.clients?.[user.id]) return "client";
+  if (state.workers?.[user.id]) return "worker";
+  return "parent";
 }
 
 function onboardingInfo(user) {
@@ -194,11 +158,31 @@ function onboardingCompleted(user) {
   return Boolean(user?.uiPreferences?.onboardingCompletedAt);
 }
 
+function accountNeedsVerification(user) {
+  return Boolean(user && !user.emailVerifiedAt);
+}
+
+function requiresOnboarding(user) {
+  if (!user) return false;
+  if (onboardingCompleted(user)) return false;
+  if (accountRoleForUser(user) === "worker") {
+    return !String(user.name || "").trim() || !String(user.location || "").trim() || !Number(user.age || 0) || !String(user.school || "").trim();
+  }
+  return !String(user.name || "").trim() || !String(user.location || "").trim();
+}
+
 function isEmailVerificationExpired(sentAt) {
-  if (!sentAt) return false;
-  const sentTime = Date.parse(sentAt);
-  if (!Number.isFinite(sentTime)) return false;
-  return Date.now() - sentTime > ONBOARDING_EXPIRES_IN_MS;
+  const time = Date.parse(sentAt || "");
+  if (!Number.isFinite(time)) return true;
+  return Date.now() - time > ONBOARDING_EXPIRES_IN_MS;
+}
+
+function sanitizeOnboardingText(value) {
+  return String(value || "").trim();
+}
+
+function userPostalCode(user) {
+  return onboardingInfo(user).postalCode || "";
 }
 
 function userDisplayName(user) {
@@ -206,49 +190,54 @@ function userDisplayName(user) {
   return info.preferredName || user?.name || user?.email || "";
 }
 
-function userLocation(user) {
-  const info = onboardingInfo(user);
-  return info.locality || user?.location || "";
-}
-
-function userPostalCode(user) {
-  return onboardingInfo(user).postalCode || "";
-}
-
 function ageRangeToNumericAge(range) {
-  const value = String(range || "").trim();
-  if (value === "Under 18") return 17;
-  if (value === "18-24") return 21;
-  if (value === "25-34") return 29;
-  if (value === "35-44") return 39;
-  if (value === "45-54") return 49;
-  if (value === "55-64") return 59;
-  if (value === "65+") return 65;
-  return 17;
+  switch (String(range || "")) {
+    case "Under 18":
+      return 17;
+    case "18-24":
+      return 18;
+    case "25-34":
+      return 25;
+    case "35-44":
+      return 35;
+    case "45-54":
+      return 45;
+    case "55-64":
+      return 55;
+    case "65+":
+      return 65;
+    default:
+      return 17;
+  }
 }
 
-function ageRangeForWorker(age) {
-  const numericAge = Number(age || 0);
-  if (!numericAge || numericAge <= 18) return "Under 18";
-  if (numericAge <= 24) return "18-24";
-  if (numericAge <= 34) return "25-34";
-  if (numericAge <= 44) return "35-44";
-  if (numericAge <= 54) return "45-54";
-  if (numericAge <= 64) return "55-64";
-  return "65+";
-}
+async function sendVerificationEmail({ to, code, role }) {
+  const response = await fetch(AUTH_EMAIL_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      to,
+      code,
+      purpose: "account-verification",
+      subject: role === "worker" ? "Verify your ParTime student account" : "Verify your ParTime account",
+      label: role === "worker" ? "student" : "client"
+    })
+  });
 
-function workerAgeLabel(worker) {
-  return worker?.ageRange || ageRangeForWorker(worker?.age);
-}
-
-function userInterests(user) {
-  const info = onboardingInfo(user);
-  return Array.isArray(info.interests) ? info.interests : [];
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok && payload.status !== "not_configured") {
+    throw new Error(payload.error || "We could not send the verification email.");
+  }
+  if (payload.status === "not_configured") {
+    throw new Error(payload.error || "Email sending is not configured yet.");
+  }
+  return payload;
 }
 
 function createSignupRecord(role, email, password) {
-  const normalizedEmail = String(email || "").trim().toLowerCase();
+  const normalizedEmail = normalizeEmail(email);
   const idPrefix = role === "worker" ? "w" : "c";
   const id = `${idPrefix}${Date.now()}${Math.random().toString(16).slice(2, 6)}`;
   const record = {
@@ -260,8 +249,8 @@ function createSignupRecord(role, email, password) {
     emailVerifiedAt: "",
     language: "English",
     location: "",
-    ...passwordRecord(password),
-    uiPreferences: {}
+    uiPreferences: {},
+    ...passwordRecord(password)
   };
 
   if (role === "worker") {
@@ -279,6 +268,7 @@ function createSignupRecord(role, email, password) {
       ratings: [],
       nextTimes: []
     };
+    state.selectedWorkerId = id;
     return state.workers[id];
   }
 
@@ -288,115 +278,8 @@ function createSignupRecord(role, email, password) {
     typicalServices: [],
     preferredCurrency: "CHF"
   };
+  state.selectedClientId = id;
   return state.clients[id];
-}
-
-function activateTestAccount(role) {
-  const normalizedRole = role === "worker" ? "worker" : "client";
-  const email =
-    normalizedRole === "worker"
-      ? "vivaan.kabilan_test.student@partime.test"
-      : "vivaan.kabilan_test.client@partime.test";
-  let user = findUserByEmail(email);
-
-  if (!user) {
-    user = createSignupRecord(normalizedRole, email, "VivaanKabilan_Test123!");
-  }
-
-  if (normalizedRole === "worker") {
-    Object.assign(user, {
-      name: "Vivaan Kabilan_Test",
-      phone: user.phone || "",
-      emailVerifiedAt: user.emailVerifiedAt || new Date().toISOString(),
-      emailVerificationCode: "",
-      emailVerificationSentAt: "",
-      location: user.location || "La Châtaigneraie",
-      language: user.language || "English",
-      age: user.age || 17,
-      school: user.school || "Ecolint",
-      parentEmail: user.parentEmail || "parent@example.com",
-      parentConfirmed: true,
-      bio: user.bio || "Test account used to preview the student dashboard.",
-      services: Array.isArray(user.services) && user.services.length ? user.services : ["Tutoring", "Errands"],
-      certifications: Array.isArray(user.certifications) && user.certifications.length ? user.certifications : ["Reliable", "Friendly"],
-      nextTimes: Array.isArray(user.nextTimes) ? user.nextTimes : [],
-      ratings: Array.isArray(user.ratings) ? user.ratings : []
-    });
-    state.selectedWorkerId = user.id;
-    state.selectedClientId = "";
-  } else {
-    Object.assign(user, {
-      name: "Vivaan Kabilan_Test",
-      phone: user.phone || "",
-      emailVerifiedAt: user.emailVerifiedAt || new Date().toISOString(),
-      emailVerificationCode: "",
-      emailVerificationSentAt: "",
-      location: user.location || "La Châtaigneraie",
-      language: user.language || "English",
-      preferredCurrency: user.preferredCurrency || "CHF",
-      typicalServices: Array.isArray(user.typicalServices) && user.typicalServices.length ? user.typicalServices : ["Tutoring", "Errands"]
-    });
-    state.selectedClientId = user.id;
-    state.selectedWorkerId = "";
-  }
-
-  writeSession({ role: normalizedRole, id: user.id });
-  void saveState();
-  return user;
-}
-
-async function sendVerificationEmail({ to, code, role }) {
-  const response = await fetch(AUTH_EMAIL_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      to,
-      code,
-      purpose: "account-verification",
-      subject:
-        role === "worker"
-          ? "Verify your ParTime student account"
-          : role === "parent"
-            ? "Verify your ParTime parent account"
-            : "Verify your ParTime account",
-      label: role === "worker" ? "student" : role === "parent" ? "parent" : "client"
-    })
-  });
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload.sent === false) {
-    throw new Error(payload.error || "We could not send the verification email.");
-  }
-  return payload;
-}
-
-function normalizedPostalLookup(parts) {
-  return parts.map((part) => String(part || "").trim()).find(Boolean) || "";
-}
-
-async function lookupLocalityFromPostalCode(postalCode) {
-  const normalized = String(postalCode || "").trim();
-  if (!normalized) return "";
-  const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&postalcode=${encodeURIComponent(normalized)}&countrycodes=ch&addressdetails=1&limit=1`, {
-    headers: {
-      Accept: "application/json"
-    }
-  });
-  if (!response.ok) return "";
-  const results = await response.json().catch(() => []);
-  const first = Array.isArray(results) ? results[0] : null;
-  const address = first?.address || {};
-  return normalizedPostalLookup([
-    address.village,
-    address.town,
-    address.city,
-    address.municipality,
-    address.hamlet,
-    address.suburb,
-    address.county
-  ]);
 }
 
 function setOnboardingComplete(user, data = {}) {
@@ -410,42 +293,20 @@ function setOnboardingComplete(user, data = {}) {
   };
 }
 
-function requiresOnboarding(user) {
-  if (!user) return false;
-  if (onboardingCompleted(user)) return false;
-  if (user.role === "worker") {
-    return !user.name || !user.location || !user.age || !user.school;
-  }
-  return !user.name || !user.location;
-}
-
-function accountNeedsVerification(user) {
-  return Boolean(user && !user.emailVerifiedAt);
-}
-
-function nameValueOrPlaceholder(value) {
-  return String(value || "");
-}
-
-function autoParentIdForEmail(email) {
-  return `parent_${hashString(String(email || "").toLowerCase().trim())}`;
-}
-
 function readSession() {
   try {
     const raw = sessionStorage.getItem(SESSION_KEY);
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+    const session = JSON.parse(raw);
+    if (!session || typeof session !== "object") return null;
+    if (!session.role && session.id) {
+      if (state?.clients && state.clients[session.id]) session.role = "client";
+      if (state?.workers && state.workers[session.id]) session.role = "worker";
+    }
+    return session.role && session.id ? session : null;
   } catch {
     return null;
   }
-}
-
-function getSessionUser() {
-  const session = readSession();
-  if (!session) return null;
-  if (session.role === "worker") return state.workers[session.id] || null;
-  if (session.role === "parent") return state.parents[session.id] || null;
-  return state.clients[session.id] || null;
 }
 
 function writeSession(session) {
@@ -468,16 +329,317 @@ function createDefaultState() {
   return {
     selectedClientId: "",
     selectedWorkerId: "",
-    selectedParentId: "",
     clients: {},
     workers: {},
     parents: {},
     jobs: [],
-    parentEvents: [],
     conversations: [],
     messages: [],
-    appReviews: []
   };
+}
+
+function conversationIdForJob(jobId) {
+  return `conv_${String(jobId || "").replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+}
+
+function readNotificationSeenAt(role, userId) {
+  const user = role === "client" ? getClient(userId) : role === "worker" ? getWorker(userId) : null;
+  const raw = user?.notificationSeenAt || "";
+  if (raw) {
+    const parsed = Date.parse(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  try {
+    const legacy = localStorage.getItem(`partime-notification-seen-${role}-${userId}`);
+    return legacy ? Number(legacy) || 0 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeNotificationSeenAt(role, userId, value = new Date().toISOString()) {
+  const user = role === "client" ? getClient(userId) : role === "worker" ? getWorker(userId) : null;
+  if (!user) return "";
+  const timestamp = new Date(value).toISOString();
+  if (user.notificationSeenAt === timestamp) return timestamp;
+  user.notificationSeenAt = timestamp;
+  void saveState();
+  try {
+    localStorage.removeItem(`partime-notification-seen-${role}-${userId}`);
+  } catch {
+    // ignore
+  }
+  return timestamp;
+}
+
+function ensureConversationForJobId(jobId) {
+  const job = state.jobs.find((item) => item.id === jobId);
+  if (!job) return null;
+  const acceptedWorkerId = job.acceptedWorkerId || (job.applications || []).find((item) => item.status === "Accepted")?.workerId || "";
+  if (!acceptedWorkerId) return null;
+  job.acceptedWorkerId = acceptedWorkerId;
+  return ensureConversationForJob(job);
+}
+
+function openConversationForJob(jobId) {
+  const conversation = getConversationForJob(jobId) || ensureConversationForJobId(jobId);
+  return conversation || null;
+}
+
+function ensureConversationForJob(job) {
+  if (!job || !job.acceptedWorkerId || !job.clientId) return null;
+  state.conversations = Array.isArray(state.conversations) ? state.conversations : [];
+  let conversation = state.conversations.find((item) => item.jobId === job.id);
+  if (conversation) {
+    conversation.clientId = job.clientId;
+    conversation.workerId = job.acceptedWorkerId;
+    conversation.updatedAt = conversation.updatedAt || job.updatedAt || job.createdAt || new Date().toISOString();
+    conversation.lastMessageAt = conversation.lastMessageAt || conversation.updatedAt;
+    return conversation;
+  }
+
+  conversation = {
+    id: conversationIdForJob(job.id),
+    jobId: job.id,
+    clientId: job.clientId,
+    workerId: job.acceptedWorkerId,
+    createdAt: job.acceptedAt || job.completedAt || job.createdAt || new Date().toISOString(),
+    updatedAt: job.acceptedAt || job.completedAt || job.createdAt || new Date().toISOString(),
+    clientLastReadAt: "",
+    workerLastReadAt: ""
+  };
+  state.conversations.unshift(conversation);
+  return conversation;
+}
+
+function normalizeMessagingState() {
+  state.conversations = Array.isArray(state.conversations) ? state.conversations : [];
+  state.messages = Array.isArray(state.messages) ? state.messages : [];
+
+  const conversationMap = new Map();
+  state.conversations = state.conversations
+    .filter((conversation) => conversation && conversation.id && conversation.jobId && conversation.clientId && conversation.workerId)
+    .map((conversation) => {
+      const normalized = {
+        id: String(conversation.id),
+        jobId: String(conversation.jobId),
+        clientId: String(conversation.clientId),
+        workerId: String(conversation.workerId),
+        createdAt: conversation.createdAt || conversation.updatedAt || new Date().toISOString(),
+        updatedAt: conversation.updatedAt || conversation.createdAt || new Date().toISOString(),
+        clientLastReadAt: conversation.clientLastReadAt || "",
+        workerLastReadAt: conversation.workerLastReadAt || ""
+      };
+      conversationMap.set(normalized.id, normalized);
+      return normalized;
+    });
+
+  for (const job of state.jobs || []) {
+    if (job.acceptedWorkerId && job.clientId) {
+      const existing = state.conversations.find((conversation) => conversation.jobId === job.id);
+      if (!existing) {
+        const conversation = {
+          id: conversationIdForJob(job.id),
+          jobId: job.id,
+          clientId: job.clientId,
+          workerId: job.acceptedWorkerId,
+          createdAt: job.acceptedAt || job.completedAt || job.createdAt || new Date().toISOString(),
+          updatedAt: job.acceptedAt || job.completedAt || job.createdAt || new Date().toISOString(),
+          clientLastReadAt: "",
+          workerLastReadAt: ""
+        };
+        state.conversations.push(conversation);
+        conversationMap.set(conversation.id, conversation);
+      }
+    }
+  }
+
+  state.messages = state.messages
+    .filter((message) => message && message.id && message.conversationId && message.senderId && message.content)
+    .filter((message) => {
+      const conversation = conversationMap.get(message.conversationId);
+      if (!conversation) return false;
+      const allowedSenders = new Set([conversation.clientId, conversation.workerId]);
+      return allowedSenders.has(String(message.senderId));
+    })
+    .map((message) => ({
+      id: String(message.id),
+      conversationId: String(message.conversationId),
+      senderId: String(message.senderId),
+      senderRole: message.senderRole || "",
+      content: String(message.content),
+      createdAt: message.createdAt || new Date().toISOString()
+    }));
+
+  const lastMessageByConversation = new Map();
+  for (const message of state.messages) {
+    const previous = lastMessageByConversation.get(message.conversationId);
+    if (!previous || new Date(message.createdAt) > new Date(previous.createdAt)) {
+      lastMessageByConversation.set(message.conversationId, message);
+    }
+  }
+
+  state.conversations = state.conversations.map((conversation) => {
+    const latestMessage = lastMessageByConversation.get(conversation.id);
+    if (latestMessage && new Date(latestMessage.createdAt) > new Date(conversation.updatedAt || 0)) {
+      return {
+        ...conversation,
+        updatedAt: latestMessage.createdAt
+      };
+    }
+    return conversation;
+  });
+}
+
+function getConversationById(conversationId) {
+  return (state.conversations || []).find((conversation) => conversation.id === conversationId);
+}
+
+function getConversationForJob(jobId) {
+  return (state.conversations || []).find((conversation) => conversation.jobId === jobId);
+}
+
+function getConversationJob(conversation) {
+  if (!conversation) return null;
+  return (state.jobs || []).find((job) => job.id === conversation.jobId) || null;
+}
+
+function getConversationParticipants(conversation) {
+  const job = getConversationJob(conversation);
+  const client = conversation ? getClient(conversation.clientId) : null;
+  const worker = conversation ? getWorker(conversation.workerId) : null;
+  return { job, client, worker };
+}
+
+function getConversationMessages(conversationId) {
+  return (state.messages || [])
+    .filter((message) => message.conversationId === conversationId)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+}
+
+function getAccessibleConversations(sessionRole, sessionUserId) {
+  if (!sessionRole || !sessionUserId) return [];
+  const conversations = (state.conversations || []).filter((conversation) => {
+    if (sessionRole === "client") return conversation.clientId === sessionUserId;
+    if (sessionRole === "worker") return conversation.workerId === sessionUserId;
+    return false;
+  });
+  return conversations
+    .map((conversation) => ({
+      ...conversation,
+      unreadCount: conversationUnreadCount(conversation, sessionRole, sessionUserId)
+    }))
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
+}
+
+function conversationUnreadCount(conversation, role, userId) {
+  if (!conversation) return 0;
+  const lastReadAt = role === "client" ? conversation.clientLastReadAt : conversation.workerLastReadAt;
+  const unread = getConversationMessages(conversation.id).filter((message) => {
+    if (message.senderId === userId) return false;
+    if (!lastReadAt) return true;
+    return new Date(message.createdAt) > new Date(lastReadAt);
+  });
+  return unread.length;
+}
+
+function conversationPreview(conversation, sessionRole, sessionUserId) {
+  const messages = getConversationMessages(conversation.id);
+  if (!messages.length) return "Say hello to open the conversation.";
+  const latest = messages[messages.length - 1];
+  const senderLabel = latest.senderId === sessionUserId ? "You" : sessionRole === "client" ? "Student" : "Client";
+  const preview = latest.content.length > 70 ? `${latest.content.slice(0, 67)}…` : latest.content;
+  return `${senderLabel}: ${preview}`;
+}
+
+function conversationPartnerName(conversation, sessionRole) {
+  if (!conversation) return "Conversation";
+  if (sessionRole === "client") {
+    return getWorker(conversation.workerId)?.name || "Student";
+  }
+  if (sessionRole === "worker") {
+    return getClient(conversation.clientId)?.name || "Client";
+  }
+  const { client, worker } = getConversationParticipants(conversation);
+  return client?.name || worker?.name || "Conversation";
+}
+
+function conversationUnreadTimestamp(conversation, role) {
+  return role === "client" ? conversation?.clientLastReadAt || "" : conversation?.workerLastReadAt || "";
+}
+
+function buildMessageNotificationsForRole(role, user) {
+  const seenAt = readNotificationSeenAt(role, user.id);
+  return getAccessibleConversations(role, user.id)
+    .flatMap((conversation) => {
+      const { job, client, worker } = getConversationParticipants(conversation);
+      const latestMessage = getConversationMessages(conversation.id).slice(-1)[0];
+      if (!latestMessage || latestMessage.senderId === user.id) return [];
+      const partner = role === "client" ? worker : client;
+      const conversationReadAt = conversationUnreadTimestamp(conversation, role);
+      const lastSeen = Math.max(seenAt, conversationReadAt ? new Date(conversationReadAt).getTime() : 0);
+      const unread = new Date(latestMessage.createdAt).getTime() > lastSeen;
+      return [
+        {
+          id: `message-${conversation.id}-${latestMessage.id}`,
+          title: `${partner ? partner.name : "Conversation"} sent a message`,
+          detail: `${job ? job.title : "Accepted job"} • ${conversationPreview(conversation, role, user.id)}`,
+          createdAt: latestMessage.createdAt,
+          unread,
+          action: "open-conversation",
+          conversationId: conversation.id
+        }
+      ];
+    })
+    .filter(Boolean);
+}
+
+function markConversationRead(conversationId) {
+  const session = readSession();
+  const conversation = getConversationById(conversationId);
+  if (!session || !conversation) return;
+  const unreadCount = conversationUnreadCount(conversation, session.role, session.id);
+  if (!unreadCount) return false;
+  const now = new Date().toISOString();
+  if (session.role === "client" && conversation.clientId === session.id) {
+    conversation.clientLastReadAt = now;
+  }
+  if (session.role === "worker" && conversation.workerId === session.id) {
+    conversation.workerLastReadAt = now;
+  }
+  conversation.updatedAt = conversation.updatedAt || now;
+  void saveState();
+  return true;
+}
+
+function syncMessagesPolling() {
+  const shouldPoll = view === "messages";
+  if (!shouldPoll && messagesPollingTimer) {
+    clearInterval(messagesPollingTimer);
+    messagesPollingTimer = null;
+    return;
+  }
+  if (shouldPoll && !messagesPollingTimer) {
+    messagesPollingTimer = window.setInterval(async () => {
+      const latest = await loadState();
+      if (!latest) return;
+      const currentStamp = JSON.stringify({
+        conversations: state.conversations,
+        messages: state.messages,
+        updatedAt: state.updatedAt
+      });
+      const latestStamp = JSON.stringify({
+        conversations: latest.conversations || [],
+        messages: latest.messages || [],
+        updatedAt: latest.updatedAt
+      });
+      if (currentStamp !== latestStamp) {
+        state = latest;
+        normalizeMessagingState();
+        render();
+      }
+    }, 6000);
+  }
 }
 
 let state = createDefaultState();
@@ -511,12 +673,14 @@ async function loadState() {
   localState = loadLocalState();
   const chosenState = chooseBestState(remoteState, localState);
   if (chosenState) {
+    state = chosenState;
+    normalizeMessagingState();
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(chosenState));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch {
       // ignore
     }
-    return chosenState;
+    return state;
   }
 
   return createDefaultState();
@@ -524,6 +688,7 @@ async function loadState() {
 
 async function saveState() {
   state.updatedAt = new Date().toISOString();
+  normalizeMessagingState();
   const snapshot = JSON.stringify(state);
   try {
     localStorage.setItem(STORAGE_KEY, snapshot);
@@ -559,7 +724,7 @@ function escapeHtml(value) {
   });
 }
 
-function formatMoney(value, currency = "USD") {
+function formatMoney(value, currency = "CHF") {
   const amount = Number(value || 0);
   const hasCents = Math.round(amount * 100) % 100 !== 0;
   try {
@@ -608,8 +773,8 @@ function getWorker(id = state.selectedWorkerId) {
   return state.workers[id];
 }
 
-function getParent(id = state.selectedParentId) {
-  return state.parents[id];
+function getLinkedAccount() {
+  return null;
 }
 
 function getApplicationsForWorker(workerId) {
@@ -629,7 +794,7 @@ function jobTotal(job) {
 
 function totalsForJobs(jobs) {
   return jobs.reduce((totals, job) => {
-    const currency = job.currency || "USD";
+    const currency = job.currency || "CHF";
     totals[currency] = (totals[currency] || 0) + jobTotal(job);
     return totals;
   }, {});
@@ -637,7 +802,7 @@ function totalsForJobs(jobs) {
 
 function formatTotals(totals) {
   const entries = Object.entries(totals);
-  if (!entries.length) return formatMoney(0, "USD");
+  if (!entries.length) return formatMoney(0, "CHF");
   return entries.map(([currency, amount]) => formatMoney(amount, currency)).join(" + ");
 }
 
@@ -666,49 +831,77 @@ function categoryOptions(selected = "") {
     .join("");
 }
 
-function currencyOptions(selected = "USD") {
+function currencyOptions(selected = "CHF") {
+  const active = currencies.some(({ code }) => code === selected) ? selected : "CHF";
   return currencies
     .map(
       ({ code, label }) =>
-        `<option value="${escapeHtml(code)}" ${code === selected ? "selected" : ""}>${escapeHtml(label)}</option>`
+        `<option value="${escapeHtml(code)}" ${code === active ? "selected" : ""}>${escapeHtml(label)}</option>`
     )
     .join("");
 }
 
-function languageOptions(selected = "English") {
-  const selectedValues = Array.isArray(selected)
-    ? selected.map((value) => String(value || "").trim()).filter(Boolean)
-    : String(selected || "")
-        .split(",")
-        .map((value) => String(value || "").trim())
-        .filter(Boolean);
-  return [`<option value="">Choose a language</option>`]
-    .concat(
-      languages.map(
-        (language) =>
-          `<option value="${escapeHtml(language)}" ${selectedValues.includes(language) ? "selected" : ""}>${escapeHtml(language)}</option>`
-      )
-    )
-    .join("");
+function normalizeLanguages(selected = []) {
+  if (Array.isArray(selected)) {
+    return selected.map((value) => String(value).trim()).filter(Boolean);
+  }
+  return String(selected || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
-function serviceCheckboxes(selectedServices = []) {
-  return categories
+function languageCheckboxes(selected = []) {
+  const active = new Set(normalizeLanguages(selected));
+  return languages
     .map(
-      (category) => `
+      (language) => `
         <label class="check-tile">
-          <input type="checkbox" name="services" value="${escapeHtml(category)}" ${
-            selectedServices.includes(category) ? "checked" : ""
-          } />
-          <span>${escapeHtml(category)}</span>
+          <input type="checkbox" name="languages" value="${escapeHtml(language)}" ${active.has(language) ? "checked" : ""} />
+          <span>${escapeHtml(language)}</span>
         </label>
       `
     )
     .join("");
 }
 
+function languageDisplay(selected = []) {
+  return normalizeLanguages(selected).join(", ");
+}
+
+function serviceCheckboxes(selectedServices = [], includeOther = false) {
+  const selected = new Set(selectedServices);
+  const hasCustomService = selectedServices.some((service) => !categories.includes(service) && service !== "__other__");
+  const otherChecked = includeOther && (selected.has("__other__") || hasCustomService);
+  const items = categories.map(
+    (category) => `
+      <label class="check-tile">
+        <input type="checkbox" name="services" value="${escapeHtml(category)}" ${
+          selected.has(category) ? "checked" : ""
+        } />
+        <span>${escapeHtml(category)}</span>
+      </label>
+    `
+  );
+
+  if (includeOther) {
+    items.push(`
+      <label class="check-tile">
+        <input type="checkbox" name="services" value="__other__" ${otherChecked ? "checked" : ""} />
+        <span>Other</span>
+      </label>
+    `);
+  }
+
+  return items.join("");
+}
+
 function customServicesValue(selectedServices = []) {
-  return selectedServices.filter((service) => !categories.includes(service)).join(", ");
+  return selectedServices.filter((service) => !categories.includes(service) && service !== "__other__").join(", ");
+}
+
+function hasOtherService(selectedServices = []) {
+  return selectedServices.some((service) => !categories.includes(service) && service !== "__other__");
 }
 
 function chipList(items, className = "") {
@@ -750,7 +943,8 @@ function formatNotificationTime(value) {
 }
 
 function buildClientNotifications(client) {
-  return state.jobs
+  const seenAt = readNotificationSeenAt("client", client.id);
+  const jobRequestItems = state.jobs
     .filter((job) => job.clientId === client.id)
     .flatMap((job) =>
       (job.applications || [])
@@ -761,14 +955,22 @@ function buildClientNotifications(client) {
             id: `client-${job.id}-${application.workerId}-${application.appliedAt}`,
             title: `${worker ? worker.name : "A student"} requested ${job.title}`,
             detail: `${job.category} • ${formatDate(job.date)} • ${paymentLabel(job)}`,
-            createdAt: application.appliedAt || job.createdAt
+            createdAt: application.appliedAt || job.createdAt,
+            unread: new Date(application.appliedAt || job.createdAt).getTime() > seenAt,
+            action: "open-request",
+            jobId: job.id,
+            workerId: application.workerId
           };
         })
-    )
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    );
+
+  const messageItems = buildMessageNotificationsForRole("client", client);
+
+  return [...jobRequestItems, ...messageItems].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
 function buildWorkerNotifications(worker) {
+  const seenAt = readNotificationSeenAt("worker", worker.id);
   const acceptedItems = state.jobs
     .filter((job) => job.acceptedWorkerId === worker.id)
     .map((job) => {
@@ -778,7 +980,10 @@ function buildWorkerNotifications(worker) {
         id: `worker-accepted-${job.id}`,
         title: `Accepted for ${job.title}`,
         detail: `${client ? client.name : "A client"} approved your request`,
-        createdAt: acceptedApplication?.acceptedAt || job.completedAt || job.createdAt
+        createdAt: acceptedApplication?.acceptedAt || job.completedAt || job.createdAt,
+        unread: new Date(acceptedApplication?.acceptedAt || job.completedAt || job.createdAt).getTime() > seenAt,
+        action: "open-conversation",
+        conversationId: getConversationForJob(job.id)?.id || ""
       };
     });
 
@@ -789,7 +994,8 @@ function buildWorkerNotifications(worker) {
       id: `worker-next-${item.jobId}-${item.clientId}-${item.createdAt}`,
       title: `Next timed by ${client ? client.name : "a client"}`,
       detail: job ? job.title : "Requested follow-up",
-      createdAt: item.createdAt
+      createdAt: item.createdAt,
+      unread: new Date(item.createdAt).getTime() > seenAt
     };
   });
 
@@ -797,18 +1003,22 @@ function buildWorkerNotifications(worker) {
     id: `worker-rating-${rating.jobId}-${rating.clientId}-${rating.createdAt}`,
     title: `New ${starsText(rating.stars)} rating`,
     detail: rating.comment ? rating.comment : "No comment was left",
-    createdAt: rating.createdAt
+    createdAt: rating.createdAt,
+    unread: new Date(rating.createdAt).getTime() > seenAt
   }));
 
-  return [...acceptedItems, ...nextTimedItems, ...ratingItems].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const messageItems = buildMessageNotificationsForRole("worker", worker);
+
+  return [...acceptedItems, ...nextTimedItems, ...ratingItems, ...messageItems].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
 function renderNotificationPanel(title, items, emptyMessage) {
+  const unreadCount = items.filter((item) => item.unread).length;
   return `
     <section class="notification-panel">
       <div class="panel-heading">
         <h2>${escapeHtml(title)}</h2>
-        <span class="pill">${items.length} updates</span>
+        <span class="pill">${unreadCount} new · ${items.length} total</span>
       </div>
       <div class="notification-list">
         ${
@@ -817,11 +1027,23 @@ function renderNotificationPanel(title, items, emptyMessage) {
                 .slice(0, 6)
                 .map(
                   (item) => `
-                    <article class="notification-item">
-                      <strong>${escapeHtml(item.title)}</strong>
-                      <span>${escapeHtml(item.detail)}</span>
-                      <small>${escapeHtml(formatNotificationTime(item.createdAt))}</small>
-                    </article>
+                    ${
+                      item.action
+                        ? `
+                          <button class="notification-item ${item.unread ? "is-unread" : ""}" type="button" data-action="${escapeHtml(item.action)}" ${item.conversationId ? `data-conversation-id="${escapeHtml(item.conversationId)}"` : ""}>
+                            <strong>${escapeHtml(item.title)}</strong>
+                            <span>${escapeHtml(item.detail)}</span>
+                            <small>${escapeHtml(formatNotificationTime(item.createdAt))}</small>
+                          </button>
+                        `
+                        : `
+                          <article class="notification-item ${item.unread ? "is-unread" : ""}">
+                            <strong>${escapeHtml(item.title)}</strong>
+                            <span>${escapeHtml(item.detail)}</span>
+                            <small>${escapeHtml(formatNotificationTime(item.createdAt))}</small>
+                          </article>
+                        `
+                    }
                   `
                 )
                 .join("")
@@ -843,67 +1065,60 @@ function sameDayConflict(workerId, candidateJob) {
   });
 }
 
-function matchWorkers(job) {
-  return Object.values(state.workers)
-    .filter((worker) => worker.parentConfirmed && Number(worker.age) < 18)
-    .map((worker) => {
-      const serviceMatch = worker.services.includes(job.category) ? 70 : 0;
-      const locationMatch = worker.location === job.location ? 20 : 8;
-      const certificationMatch = worker.certifications.length ? 5 : 0;
-      return {
-        worker,
-        score: serviceMatch + locationMatch + certificationMatch
-      };
-    })
-    .filter((match) => match.score >= 70)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 3);
-}
-
-function addParentEvent(workerId, type, message) {
-  state.parentEvents.unshift({
-    id: `e${Date.now()}`,
-    workerId,
-    type,
-    message,
-    createdAt: new Date().toISOString()
-  });
-}
+function addActivityEvent() {}
 
 function displayNameFromEmail(email) {
   const localPart = String(email || "")
     .split("@")[0]
     .replace(/[._-]+/g, " ")
     .trim();
-  if (!localPart) return "Parent";
-  return `Parent ${localPart
+  if (!localPart) return "User";
+  return `User ${localPart
     .split(/\s+/)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ")}`;
 }
 
-function createAutoParentAccount(worker) {
-  const email = String(worker.parentEmail || "").toLowerCase().trim();
-  if (!email) return null;
-  const existing = Object.values(state.parents).find((parent) => parent.email.toLowerCase() === email);
-  const parent = existing || {
-    id: autoParentIdForEmail(email),
-    name: displayNameFromEmail(email),
-    email,
-    linkedWorkerId: worker.id,
-    emailVerificationCode: "",
-    emailVerificationSentAt: "",
-    emailVerifiedAt: ""
-  };
-  parent.name = parent.name || displayNameFromEmail(email);
-  parent.email = email;
-  parent.linkedWorkerId = worker.id;
-  parent.emailVerifiedAt = worker.parentVerifiedAt || parent.emailVerifiedAt || new Date().toISOString();
-  parent.emailVerificationCode = "";
-  parent.emailVerificationSentAt = "";
-  state.parents[parent.id] = parent;
-  state.selectedParentId = parent.id;
-  return parent;
+function createLinkedAccount(worker) {
+  return null;
+}
+
+function pathForView(nextView, meta = {}) {
+  if (nextView === "messages" && meta.conversationId) return `/messages/${encodeURIComponent(meta.conversationId)}`;
+  if (nextView === "notifications") return "/notifications";
+  if (nextView === "client-dashboard") return "/client";
+  if (nextView === "worker-dashboard") return "/student";
+  if (nextView === "forgot-password") return "/forgot-password";
+  if (nextView === "settings") return "/settings";
+  if (nextView === "login") return "/login";
+  if (nextView === "create-account") return "/create-account";
+  return "/";
+}
+
+function routeFromLocation() {
+  const pathname = window.location.pathname.replace(/\/+$/, "") || "/";
+  const conversationMatch = pathname.match(/^\/messages\/([^/]+)$/);
+  if (conversationMatch) {
+    return { view: "messages", meta: { conversationId: decodeURIComponent(conversationMatch[1]) } };
+  }
+  if (pathname === "/messages") return { view: "messages", meta: {} };
+  if (pathname === "/notifications") return { view: "notifications", meta: {} };
+  if (pathname === "/client") return { view: "client-dashboard", meta: {} };
+  if (pathname === "/student") return { view: "worker-dashboard", meta: {} };
+  if (pathname === "/forgot-password") return { view: "forgot-password", meta: {} };
+  if (pathname === "/settings") return { view: "settings", meta: {} };
+  if (pathname === "/login") return { view: "login", meta: {} };
+  if (pathname === "/create-account") return { view: "create-account", meta: {} };
+  return { view: "landing", meta: {} };
+}
+
+function applyRouteFromLocation(replace = false) {
+  const route = routeFromLocation();
+  view = route.view;
+  routeMeta = route.meta || {};
+  if (replace) {
+    window.history.replaceState({ view, meta: routeMeta }, "", window.location.pathname + window.location.search + window.location.hash);
+  }
 }
 
 function navigate(nextView, meta = {}) {
@@ -912,6 +1127,12 @@ function navigate(nextView, meta = {}) {
   logoMenuOpen = false;
   clientNotificationsOpen = false;
   workerNotificationsOpen = false;
+  const nextPath = pathForView(nextView, meta);
+  if (window.location.pathname !== nextPath) {
+    window.history.pushState({ view: nextView, meta }, "", nextPath);
+  } else {
+    window.history.replaceState({ view: nextView, meta }, "", nextPath);
+  }
   render();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -927,6 +1148,7 @@ function render() {
   `;
   bindCommonEvents();
   bindViewEvents();
+  syncMessagesPolling();
 }
 
 function renderProfileModal() {
@@ -947,10 +1169,10 @@ function renderProfileModal() {
         </div>
         <p>${escapeHtml(worker.bio)}</p>
         <div class="profile-detail-grid">
-          <span><strong>Age</strong>${escapeHtml(workerAgeLabel(worker))}</span>
+          <span><strong>Age</strong>${escapeHtml(worker.age)}</span>
           <span><strong>School</strong>${escapeHtml(worker.school)}</span>
           <span><strong>Location</strong>${escapeHtml(worker.location)}</span>
-          <span><strong>Language</strong>${escapeHtml(worker.language)}</span>
+          <span><strong>Language</strong>${escapeHtml(languageDisplay(worker.languages || worker.language))}</span>
         </div>
         <div class="profile-section">
           <h3>Services</h3>
@@ -980,7 +1202,6 @@ function renderHeader() {
         ${logoMenuOpen ? `
           <div class="logo-menu" role="menu" aria-label="ParTime menu">
             <button class="logo-menu-item" type="button" data-view="landing">Home page</button>
-            <button class="logo-menu-item" type="button" data-view="review">Review</button>
             ${session
               ? `
                 <button class="logo-menu-item" type="button" data-action="logout">Sign out</button>
@@ -993,8 +1214,8 @@ function renderHeader() {
         ` : ""}
       </div>
       <div class="header-actions">
-        <button class="ghost small" data-action="open-client-profile">Client profile</button>
-        <button class="ghost small" data-action="open-worker-profile">Student profile</button>
+        <button class="ghost small" type="button" data-action="open-client-profile">Client profile</button>
+        <button class="ghost small" type="button" data-action="open-worker-profile">Student profile</button>
         ${session ? `<button class="nav-link logout-link" data-action="logout">Log out</button>` : ""}
       </div>
     </header>
@@ -1003,81 +1224,87 @@ function renderHeader() {
 
 function renderView() {
   if (view === "login") return renderLogin();
+  if (view === "forgot-password") return renderForgotPassword();
   if (view === "create-account") return renderCreateAccount();
   if (view === "onboard-client") return renderClientOnboarding();
   if (view === "onboard-worker") return renderWorkerOnboarding();
   if (view === "client-dashboard") return renderClientDashboard();
   if (view === "worker-dashboard") return renderWorkerDashboard();
-  if (view === "parent-monitor") return renderParentMonitor();
+  if (view === "notifications") return renderNotificationsView();
+  if (view === "messages") return renderMessagesView();
   if (view === "settings") return renderSettings();
-  if (view === "review") return renderReviewPage();
   return renderLanding();
 }
 
-function appReviewsForDisplay(limit = 3) {
-  const reviews = Array.isArray(state.appReviews) ? state.appReviews : []
-    .sort((a, b) => {
-      const starsDiff = (Number(b.stars) || 0) - (Number(a.stars) || 0);
-      if (starsDiff !== 0) return starsDiff;
-      return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
-    });
-  const seen = new Set();
-  return reviews
-    .filter((review) => {
-      const key = review.id || `${review.name}-${review.comment}-${review.createdAt}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, limit);
-}
-
-function renderAppReviewCard(review) {
-  const stars = Math.max(1, Math.min(5, Number(review.stars) || 5));
-  return `
-    <article class="review-card">
-      <div class="review-stars" aria-label="${stars} star rating">${"★".repeat(stars)}${"☆".repeat(5 - stars)}</div>
-      <p>“${escapeHtml(review.comment || "No comment left.")}”</p>
-      <strong>${escapeHtml(review.name || "Anonymous")}${review.role ? `, ${escapeHtml(review.role)}` : ""}</strong>
-    </article>
-  `;
-}
-
-function renderReviewPage() {
+function renderNotificationsView() {
   const session = readSession();
-  const user = getSessionUser();
-  const lockedOut = !session || !user;
-  const starsOptions = [1, 2, 3, 4, 5].map((value) => `<option value="${value}">${"★".repeat(value)}</option>`).join("");
+  if (!session) {
+    return `
+      <section class="messages-shell messages-shell--locked">
+        <div class="access-page panel">
+          <p class="eyebrow">Notifications</p>
+          <h1>Sign in to view notifications</h1>
+          <p class="muted">Please sign in to see your latest updates.</p>
+          <div class="action-row">
+            <button class="primary" data-view="login">Sign in</button>
+            <button class="secondary" data-view="landing">Home</button>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  const returnTo = routeMeta.returnTo || pathForView(session.role === "client" ? "client-dashboard" : "worker-dashboard", {});
+  writeNotificationSeenAt(session.role, session.id);
+  const notifications = session.role === "client" ? buildClientNotifications(getClient(session.id)) : buildWorkerNotifications(getWorker(session.id));
 
   return `
-    <section class="auth-layout auth-layout--single">
-      <div class="auth-panel">
-        <p class="eyebrow">Review</p>
-        <h1>Leave a review</h1>
-        <p class="muted">Pick a star rating and add a short comment if you want.</p>
-        ${lockedOut
-          ? `
-            <div class="panel">
-              Sign in first so your review is tied to your account.
-            </div>
-          `
-          : `
-            <form class="stack-form review-form" id="reviewForm">
-              <label>
-                <span>Star rating</span>
-                <select name="stars" required>
-                  ${starsOptions}
-                </select>
-              </label>
-              <label>
-                <span>Comment</span>
-                <textarea name="comment" rows="5" maxlength="500" placeholder="Optional comment about the experience"></textarea>
-              </label>
-              <button class="primary full" type="submit">Save review</button>
-              <button class="text-link" type="button" data-view="landing">Back</button>
-            </form>
-          `
-        }
+    <section class="messages-shell notifications-shell">
+      <div class="section-heading section-heading--with-actions">
+        <div>
+          <p class="eyebrow">Notifications</p>
+          <h1>Latest updates</h1>
+          <p class="muted">Your job requests, message alerts, ratings, and timing updates all live here.</p>
+        </div>
+        <div class="section-actions">
+          <button class="secondary small" type="button" data-action="go-back-from-notifications" data-return-to="${escapeHtml(returnTo)}">Back</button>
+        </div>
+      </div>
+
+      <div class="notifications-page panel">
+        <div class="panel-heading">
+          <h2>${session.role === "client" ? "Client notifications" : "Student notifications"}</h2>
+          <span class="pill">${notifications.length} total</span>
+        </div>
+        <div class="notification-list notification-list--page">
+          ${
+            notifications.length
+              ? notifications
+                  .map(
+                    (item) => `
+                      ${
+                        item.action
+                          ? `
+                            <button class="notification-item ${item.unread ? "is-unread" : ""}" type="button" data-action="${escapeHtml(item.action)}" ${item.jobId ? `data-job-id="${escapeHtml(item.jobId)}"` : ""} ${item.workerId ? `data-worker-id="${escapeHtml(item.workerId)}"` : ""} ${item.conversationId ? `data-conversation-id="${escapeHtml(item.conversationId)}"` : ""}>
+                              <strong>${escapeHtml(item.title)}</strong>
+                              <span>${escapeHtml(item.detail)}</span>
+                              <small>${escapeHtml(formatNotificationTime(item.createdAt))}</small>
+                            </button>
+                          `
+                          : `
+                            <article class="notification-item ${item.unread ? "is-unread" : ""}">
+                              <strong>${escapeHtml(item.title)}</strong>
+                              <span>${escapeHtml(item.detail)}</span>
+                              <small>${escapeHtml(formatNotificationTime(item.createdAt))}</small>
+                            </article>
+                          `
+                      }
+                    `
+                  )
+                  .join("")
+              : renderEmpty("No notifications yet.")
+          }
+        </div>
       </div>
     </section>
   `;
@@ -1089,22 +1316,33 @@ function renderSettings() {
       <div class="section-heading">
         <p class="eyebrow">App settings</p>
         <h1>Settings</h1>
-        <p class="muted">Quick controls for the app look and account access.</p>
+        <p class="muted">A calmer corner for visual preferences, account tools, and small quality-of-life controls.</p>
       </div>
       <div class="settings-grid">
-        <article class="panel">
+        <article class="panel settings-card settings-card--mint">
           <div class="panel-heading">
-            <h2>Interface</h2>
-            <span class="pill">Visual</span>
+            <h2>Visual mood</h2>
+            <span class="pill">Soft</span>
           </div>
-          <p class="muted">This area is where the app-wide display preferences live.</p>
+          <p class="muted">Warm color palettes, compact layouts, and gentle motion all live here.</p>
+          <div class="settings-swatch-row" aria-hidden="true">
+            <span class="settings-swatch settings-swatch--green"></span>
+            <span class="settings-swatch settings-swatch--blue"></span>
+            <span class="settings-swatch settings-swatch--peach"></span>
+            <span class="settings-swatch settings-swatch--lavender"></span>
+          </div>
         </article>
-        <article class="panel">
+        <article class="panel settings-card settings-card--blue">
           <div class="panel-heading">
-            <h2>Account</h2>
-            <span class="pill">Access</span>
+            <h2>Account tools</h2>
+            <span class="pill">Secure</span>
           </div>
-          <p class="muted">Use the menu above to switch back home, sign in, or sign out.</p>
+          <p class="muted">Password, language, location, and visibility controls stay close at hand.</p>
+          <div class="settings-chip-row">
+            <span class="pill tiny">Password</span>
+            <span class="pill tiny">Language</span>
+            <span class="pill tiny">Notifications</span>
+          </div>
         </article>
       </div>
       <div class="action-row">
@@ -1115,28 +1353,56 @@ function renderSettings() {
   `;
 }
 
+function renderHeroScene() {
+  return `
+    <figure class="hero-visual hero-visual--scene" aria-hidden="true">
+      <div class="hero-scene">
+        <div class="hero-scene__stage">
+          <div class="hero-scene__mark" aria-hidden="true">
+            <span class="scene-pill scene-pill--mint">Live local feed</span>
+            <span class="hero-scene__arrow"></span>
+          </div>
+          <div class="hero-scene__board hero-scene__board--main">
+            <div class="scene-board__top">
+              <span class="scene-badge scene-badge--mint">Post a job</span>
+              <span class="scene-badge scene-badge--sky">Public feed</span>
+            </div>
+            <div class="hero-scene__listing">
+              <span class="scene-job-card__label">Pet Care</span>
+              <strong>Walk Luna after school</strong>
+              <small>CHF 45 · 3 applicants · Open today</small>
+            </div>
+            <div class="hero-scene__caption">
+              <strong>Clients post once.</strong>
+              <span>Students apply from a feed that stays clean and immediate.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </figure>
+  `;
+}
+
 function renderLanding() {
   return `
     <section class="hero-band">
       <div class="hero-copy">
-        <p class="eyebrow">Parent-aware part-time help</p>
+        <p class="eyebrow">Friendly part-time help</p>
         <h1>ParTime</h1>
         <p class="lede">
-          A local marketplace where clients post trusted part-time jobs and students 18 and under can apply with parent visibility built in.
+          A trusted local marketplace for the Ecolint – La Châtaigneraie community where students 18 and under can discover and apply for part-time jobs with a softer, friendlier feel.
         </p>
         <div class="action-row">
           <button class="primary" data-view="login">Sign in</button>
           <button class="secondary" data-view="create-account">Create account</button>
         </div>
         <div class="trust-row" aria-label="Marketplace trust notes">
-          <span>Parent confirmation</span>
           <span>Fixed or hourly pay</span>
-          <span>Read-only safety view</span>
+          <span>Real-time updates</span>
+          <span>Safe account checks</span>
         </div>
       </div>
-      <figure class="hero-visual">
-        <img src="assets/partime-hero.png" alt="ParTime dashboard preview with job cards, student profiles, ratings, and parent updates" />
-      </figure>
+      ${renderHeroScene()}
     </section>
 
     <section class="section-band">
@@ -1147,63 +1413,95 @@ function renderLanding() {
       <div class="step-story">
         <article class="step-row">
           <div class="step-visual step-visual--job" aria-hidden="true">
-            <div class="visual-card">
+            <div class="visual-card visual-card--job">
               <div class="visual-card__top">
                 <span class="visual-badge visual-badge--green">Post a job</span>
-                <span class="visual-chip">Public feed</span>
               </div>
-              <div class="visual-line visual-line--wide"></div>
-              <div class="visual-line"></div>
-              <div class="visual-grid">
-                <span></span><span></span><span></span>
+              <div class="visual-job-card visual-job-card--accent visual-job-card--wide">
+                <strong>Walk the dog after school</strong>
+                <span>3 applicants · CHF 45 · fixed</span>
+              </div>
+              <div class="visual-job-summary">
+                <span>One listing</span>
+                <span>Public feed</span>
               </div>
             </div>
           </div>
           <div class="step-copy">
             <span class="number">1</span>
-            <h3>Clients post jobs</h3>
-            <p>Clients choose a title, category, date, pay type, amount, and currency. The job appears in the live student feed right away.</p>
+            <p class="step-kicker">POST A JOB</p>
+            <h3 class="step-title">Have a job to be done?</h3>
+            <p class="step-note">Create your listing in minutes and see it appear in the public feed.</p>
           </div>
         </article>
         <article class="step-row step-row--reverse">
           <div class="step-visual step-visual--apply" aria-hidden="true">
             <div class="visual-card visual-card--feed">
-              <div class="feed-card-mini">
-                <strong>Lawn Care</strong>
-                <span>Apply today</span>
+              <div class="visual-card__top">
+                <span class="visual-badge visual-badge--green">Find jobs</span>
               </div>
-              <div class="feed-card-mini feed-card-mini--accent">
-                <strong>Pet Sitting</strong>
-                <span class="pill tiny">Apply</span>
+              <div class="visual-filter-row">
+                <span class="pill tiny">All</span>
+                <span class="pill tiny">Lawn Care</span>
+                <span class="pill tiny">Pet Care</span>
+                <span class="pill tiny">Tech Help</span>
               </div>
-              <div class="feed-card-mini">
-                <strong>Tutoring</strong>
-                <span>Next available</span>
+              <div class="visual-feed-list">
+                <div class="feed-card-mini">
+                  <div>
+                    <strong>Lawn Care</strong>
+                    <span>Maplewood • 2 hours • $45</span>
+                  </div>
+                </div>
+                <div class="feed-card-mini feed-card-mini--accent">
+                  <div>
+                    <strong>Pet Care</strong>
+                    <span>Cedar Grove • tomorrow • $60</span>
+                  </div>
+                </div>
+                <div class="feed-card-mini">
+                  <div>
+                    <strong>Tutoring</strong>
+                    <span>Remote • after school • $35</span>
+                  </div>
+                </div>
               </div>
+              <div class="visual-feed-footer"><span>Live feed</span><span>Apply once</span></div>
             </div>
           </div>
           <div class="step-copy">
             <span class="number">2</span>
-            <h3>Students apply</h3>
-            <p>Students filter nearby jobs, apply when dates do not overlap, and keep a running view of applications and completed earnings.</p>
+            <p class="step-kicker">FIND WORK</p>
+            <h3 class="step-title">Find nearby work that fits your skills.</h3>
+            <p class="step-note">Filter by category and apply from a live feed that updates instantly.</p>
           </div>
         </article>
         <article class="step-row">
-          <div class="step-visual step-visual--parent" aria-hidden="true">
+          <div class="step-visual step-visual--monitor" aria-hidden="true">
             <div class="visual-card visual-card--monitor">
               <div class="monitor-top">
                 <span class="bell-dot"></span>
-                <span>Parent view</span>
+                <span>Live updates</span>
               </div>
-              <div class="monitor-line monitor-line--active"></div>
-              <div class="monitor-line"></div>
-              <div class="monitor-line monitor-line--thin"></div>
+              <div class="visual-monitor-panel visual-monitor-panel--accent">
+                <strong>4.9 / 5</strong>
+                <span>after 5 ratings</span>
+                <div class="monitor-rating">Public rating</div>
+                <span class="monitor-comment">Great communication and careful work.</span>
+              </div>
+              <div class="visual-monitor-list">
+                <span>Job request</span>
+                <span>Accepted</span>
+                <span>Next timed</span>
+              </div>
+              <div class="visual-feed-footer"><span>Activity updates</span><span>Lifetime earnings</span></div>
             </div>
           </div>
           <div class="step-copy">
             <span class="number">3</span>
-            <h3>Parents monitor</h3>
-            <p>A linked parent account sees applications, work in progress, completion history, and safety email updates.</p>
+            <p class="step-kicker">STAY IN THE LOOP</p>
+            <h3 class="step-title">Stay in the loop from request to finish.</h3>
+            <p class="step-note">Notifications keep the progress clear without getting in the way.</p>
           </div>
         </article>
       </div>
@@ -1213,7 +1511,21 @@ function renderLanding() {
         <h2>What people say about ParTime</h2>
       </div>
       <div class="review-grid">
-        ${appReviewsForDisplay().map(renderAppReviewCard).join("")}
+        <article class="review-card">
+          <div class="review-rating" aria-label="5 out of 5">Rated 5/5</div>
+          <p>“The app felt really easy to use, and I liked being able to see everything in one place.”</p>
+          <strong>Jordan, client</strong>
+        </article>
+        <article class="review-card">
+          <div class="review-rating" aria-label="5 out of 5">Rated 5/5</div>
+          <p>“I could apply fast, and the notifications made it simple to keep track of what was happening.”</p>
+          <strong>Maya, student</strong>
+        </article>
+        <article class="review-card">
+          <div class="review-rating" aria-label="4 out of 5">Rated 4/5</div>
+          <p>“It feels trustworthy and clear. The live updates make the whole setup a lot more comfortable.”</p>
+          <strong>Ana, customer</strong>
+        </article>
       </div>
     </section>
 
@@ -1221,26 +1533,67 @@ function renderLanding() {
 }
 
 function renderLogin() {
-  const notice = routeMeta.loginNotice || helperNotice;
+  const loginNotice = routeMeta.loginNotice || "";
   return `
-    <section class="auth-layout">
-      <div class="auth-panel">
+    <section class="auth-layout auth-layout--single auth-layout--login">
+      <div class="auth-panel auth-panel--login">
         <p class="eyebrow">Secure access</p>
         <h1>Sign in</h1>
-        <p class="muted">Use the same sign-in screen for every account.</p>
-        ${notice ? `<div class="notice-banner">${escapeHtml(notice)}</div>` : ""}
+        <p class="muted">Use the same sign-in screen for every account and pick up right where you left off.</p>
+        ${loginNotice ? `<div class="form-success">${escapeHtml(loginNotice)}</div>` : ""}
         <form class="stack-form" id="loginForm">
           <label>
             <span>Email</span>
-            <input type="email" name="email" placeholder="name@example.com" required />
+            <input type="email" name="email" placeholder="name@example.com" autocomplete="username" required />
           </label>
           <label>
             <span>Password</span>
-            <input type="password" name="password" placeholder="Enter your password" required />
+            <input type="password" name="password" placeholder="Enter your password" autocomplete="current-password" required />
           </label>
           <button class="primary full" type="submit">Submit</button>
         </form>
-        <button class="text-link" data-view="create-account">Create an account</button>
+        <div class="auth-action-stack">
+          <button class="secondary full" type="button" data-view="create-account">Create account</button>
+          <button class="text-link auth-forgot-link" type="button" data-view="forgot-password">Forgot password?</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderForgotPassword() {
+  const resetEmail = routeMeta.email || "";
+  const resetNotice = routeMeta.resetNotice || "";
+  return `
+    <section class="auth-layout auth-layout--single auth-layout--login">
+      <div class="auth-panel auth-panel--login">
+        <p class="eyebrow">Secure access</p>
+        <h1>Reset password</h1>
+        <p class="muted">We’ll send a reset code and let you set a new password for the account that matches your email.</p>
+        ${resetNotice ? `<div class="form-success">${escapeHtml(resetNotice)}</div>` : ""}
+        <form class="stack-form" id="forgotPasswordForm">
+          <label>
+            <span>Email</span>
+            <input type="email" name="email" value="${escapeHtml(resetEmail)}" required />
+          </label>
+          <button class="secondary full" type="button" data-action="send-reset-code">Send Reset Link</button>
+          <label>
+            <span>Reset code</span>
+            <input type="text" name="resetCode" inputmode="numeric" maxlength="8" placeholder="Enter your code" />
+          </label>
+          <label>
+            <span>New password</span>
+            <input type="password" name="password" minlength="8" required />
+          </label>
+          <label>
+            <span>Confirm password</span>
+            <input type="password" name="confirmPassword" minlength="8" required />
+          </label>
+          <button class="primary full" type="submit">Update password</button>
+        </form>
+        <div class="auth-action-stack">
+          <button class="text-link auth-forgot-link" type="button" data-view="login">Back to sign in</button>
+        </div>
       </div>
     </section>
   `;
@@ -1252,7 +1605,7 @@ function renderCreateAccount() {
       <div class="auth-panel">
         <p class="eyebrow">New account</p>
         <h1>Create account</h1>
-        <p class="muted">Choose the type of account you want to create.</p>
+        <p class="muted">Choose the type of account you want to create. We’ll start with email and password, then verify the account and finish the first-time profile setup after sign in.</p>
         <div class="account-choices account-choices--stackable">
           <button class="account-card account-card--client" data-view="onboard-client" data-stage="register" type="button">
             <span class="account-card-label">Client account</span>
@@ -1262,7 +1615,7 @@ function renderCreateAccount() {
           <button class="account-card account-card--worker" data-view="onboard-worker" data-stage="register" type="button">
             <span class="account-card-label">Student account</span>
             <strong>Create a worker profile</strong>
-            <small>Verify email, add parent access, and start applying.</small>
+            <small>Verify email, add your details, and start applying.</small>
           </button>
         </div>
       </div>
@@ -1271,10 +1624,13 @@ function renderCreateAccount() {
 }
 
 function renderClientOnboarding() {
-  const stage = routeMeta.stage || "register";
+  const client = getClient() || findUserByEmail(routeMeta.email || "");
+  const stage =
+    routeMeta.stage ||
+    (!client ? "register" : !client.emailVerificationSentAt ? "register" : !client.emailVerifiedAt ? "verify" : !onboardingCompleted(client) ? "details" : "details");
+  if (stage === "register") return renderClientRegistrationScreen();
   if (stage === "details") return renderClientDetailsForm();
-  if (stage === "verify") return renderClientVerificationScreen();
-  return renderClientRegistrationScreen();
+  return renderClientVerificationScreen();
 }
 
 function renderClientRegistrationScreen() {
@@ -1282,69 +1638,61 @@ function renderClientRegistrationScreen() {
     <section class="form-page">
       <div class="section-heading">
         <p class="eyebrow">Client sign up</p>
-        <h1>Create your client account</h1>
+        <h1>Create your account</h1>
+        <p class="muted">Enter an email and password to get started. We’ll send a verification code right after you submit.</p>
       </div>
-      <div class="verification-layout verification-layout--vertical">
-        <form class="profile-form" id="clientOnboardingForm">
-          <div class="verification-card">
-            <h3>Account details</h3>
-            <p>Enter your email and password, then submit to receive your verification code.</p>
-            <label>
-              <span>Email address</span>
-              <input type="email" name="email" placeholder="name@example.com" required />
-            </label>
-            ${passwordFieldMarkup("password", "Create password")}
+      <form class="profile-form" id="clientOnboardingForm" data-form="client-register">
+        <div class="verification-card">
+          <label>
+            <span>Email</span>
+            <input type="email" name="email" value="" placeholder="name@example.com" autocomplete="username" required />
+          </label>
+          ${passwordFieldMarkup("password", "Create password", "new-password")}
+          <div class="verification-status">
+            We’ll send a verification code after you submit this form.
           </div>
-          <div class="form-actions onboarding-actions">
-            <button class="primary" type="submit">Submit</button>
-            <button class="text-link" type="button" data-view="create-account">Back</button>
-          </div>
-        </form>
-      </div>
+        </div>
+        <div class="form-actions onboarding-actions">
+          <button class="primary" type="submit">Submit</button>
+        </div>
+      </form>
     </section>
   `;
 }
 
 function renderClientVerificationScreen() {
   const client = getClient();
-  const verificationCode = client.emailVerificationCode || "";
-  const verificationSent = Boolean(client.emailVerificationSentAt);
-  const verified = Boolean(client.emailVerifiedAt);
-
   return `
     <section class="form-page">
-      <div class="section-heading">
-        <p class="eyebrow">Client sign up</p>
-        <h1>Verify your email first</h1>
+      <div class="section-heading section-heading--with-actions">
+        <div>
+          <p class="eyebrow">Client sign up</p>
+          <h1>Verify your email</h1>
+          <p class="muted">A verification code has been sent to your email address. Please enter the code below to verify your account.</p>
+        </div>
+        <div class="section-actions">
+          <button class="secondary small" type="button" data-view="create-account">Back</button>
+        </div>
       </div>
       <div class="verification-layout verification-layout--vertical">
-        <form class="profile-form" id="clientOnboardingForm">
-          <div class="verification-card">
-            <h3>Email verification</h3>
-            <p>A verification code has been sent to your email address. Please enter the code below to verify your account.</p>
-            <label>
-              <span>Verification code</span>
-              <input
-                type="text"
-                name="emailVerificationCode"
-                inputmode="numeric"
-                maxlength="8"
-                value="${escapeHtml(verificationCode)}"
-                placeholder="Enter the 8 digit code"
-                ${verificationSent ? "required" : ""}
-              />
-            </label>
-            <div class="verification-status ${verified ? "is-confirmed" : ""}">
-              ${verified ? "Email verified. Please sign in." : verificationSent ? "Code sent. Enter it to continue." : "No code sent yet."}
-            </div>
+        <form class="profile-form" id="clientOnboardingForm" data-form="client-verify">
+          <label>
+            <span>Verification code</span>
+            <input
+              type="text"
+              name="emailVerificationCode"
+              inputmode="numeric"
+              maxlength="8"
+              placeholder="Enter the 8 digit code"
+              required
+            />
+          </label>
+          <div class="verification-status ${client.emailVerifiedAt ? "is-confirmed" : ""}">
+            ${client.emailVerifiedAt ? "Email verified. Please sign in to continue." : "Enter the code you received by email."}
           </div>
-          <div class="form-actions onboarding-actions">
-            <button class="secondary small" type="button" data-action="send-client-email-code">
-              ${verificationSent ? "Resend code" : "Send code"}
-            </button>
-            <button class="ghost small" type="button" data-action="verify-client-email-code" ${verificationSent ? "" : "disabled"}>
-              Verify code
-            </button>
+          <div class="form-actions onboarding-actions verification-actions">
+            <button class="secondary small" type="button" data-action="send-client-email-code">Resend code</button>
+            <button class="primary" type="button" data-action="verify-client-email-code">Verify code</button>
           </div>
         </form>
       </div>
@@ -1352,24 +1700,49 @@ function renderClientVerificationScreen() {
   `;
 }
 
+function ageRangeForWorker(age) {
+  const numericAge = Number(age || 0);
+  if (numericAge > 0 && numericAge < 18) return "Under 18";
+  if (numericAge >= 18 && numericAge <= 24) return "18-24";
+  if (numericAge >= 25 && numericAge <= 34) return "25-34";
+  if (numericAge >= 35 && numericAge <= 44) return "35-44";
+  if (numericAge >= 45 && numericAge <= 54) return "45-54";
+  if (numericAge >= 55 && numericAge <= 64) return "55-64";
+  return "65+";
+}
+
 function renderClientDetailsForm() {
   const client = getClient();
+  const isProfileEdit = routeMeta.mode === "edit";
   const onboarding = onboardingInfo(client);
-  const nameFieldValue = onboardingCompleted(client) ? (onboarding.preferredName || client.name || "") : "";
   return `
     <section class="form-page">
-      <div class="section-heading">
-        <p class="eyebrow">Client sign up</p>
-        <h1>Set up your profile</h1>
+      <div class="section-heading section-heading--with-actions">
+        <div>
+          <p class="eyebrow">Client profile</p>
+          <h1>${isProfileEdit ? "Edit your profile" : "Finish your setup"}</h1>
+          <p class="muted">${isProfileEdit ? "Update the details below whenever you want." : "A few quick details help us match you with the right jobs."}</p>
+        </div>
+        <div class="section-actions">
+          ${isProfileEdit ? `<button class="secondary small" type="button" data-action="back-from-profile-edit">Back</button>` : ""}
+        </div>
       </div>
-      <form class="profile-form" id="clientOnboardingForm">
-          <div class="form-grid onboarding-grid">
-            <label>
-              <span>What name would you like us to call you?</span>
-              <input type="text" name="name" value="${escapeHtml(nameFieldValue)}" placeholder="Jordan Taylor" required />
-            </label>
+      <form class="profile-form" id="clientOnboardingForm" data-form="client-details">
+        <div class="onboarding-progress" aria-hidden="true">
+          <span class="onboarding-progress__label">Step 2 of 2</span>
+          <div class="onboarding-progress__track"><span class="onboarding-progress__bar" style="width:100%"></span></div>
+        </div>
+        <div class="form-grid onboarding-grid">
           <label>
-            <span>Email address</span>
+            <span>Preferred name</span>
+            <input type="text" name="name" placeholder="Jordan Taylor" value="${routeMeta.mode === "edit" ? escapeHtml(client.name) : escapeHtml(onboarding.preferredName || "")}" required />
+          </label>
+          <label>
+            <span>Last name</span>
+            <input type="text" name="surname" value="${escapeHtml(onboarding.surname || client.surname || "")}" required />
+          </label>
+          <label>
+            <span>Email</span>
             <input type="email" value="${escapeHtml(client.email)}" readonly />
           </label>
           <label>
@@ -1378,31 +1751,31 @@ function renderClientDetailsForm() {
           </label>
           <label>
             <span>Postal code</span>
-            <input type="text" name="postalCode" value="${escapeHtml(onboarding.postalCode || userPostalCode(client))}" placeholder="8092" required />
+            <input type="text" name="postalCode" value="${escapeHtml(userPostalCode(client))}" placeholder="Enter your postal code" required />
           </label>
           <label>
             <span>Locality</span>
-            <input type="text" name="location" value="${escapeHtml(onboarding.locality || client.location)}" placeholder="Zurich" required />
-          </label>
-          <label>
-            <span>What languages do you speak?</span>
-            <select name="language" multiple size="4" required>${languageOptions(onboarding.languages || client.language)}</select>
+            <input type="text" name="locality" value="${escapeHtml(client.location)}" placeholder="Detected from your postal code" required />
           </label>
           <label>
             <span>Preferred currency</span>
             <select name="preferredCurrency" required>${currencyOptions(client.preferredCurrency || "CHF")}</select>
           </label>
-          <label>
-            <span>About you</span>
-            <textarea name="about" rows="4" placeholder="Tell people a little about yourself">${escapeHtml(onboarding.about || "")}</textarea>
-          </label>
+          <fieldset class="form-grid__full">
+            <legend>What languages do you speak?</legend>
+            <div class="check-grid">${languageCheckboxes(client.languages || client.language)}</div>
+          </fieldset>
         </div>
         <fieldset>
           <legend>Services you are interested in</legend>
           <div class="check-grid">${serviceCheckboxes(client.typicalServices)}</div>
         </fieldset>
+        <label>
+          <span>About you</span>
+          <textarea name="about" rows="3" placeholder="Tell helpers a little about your household and what you need">${escapeHtml(onboarding.about || "")}</textarea>
+        </label>
         <div class="form-actions">
-          <button class="primary" type="submit">Finish setup</button>
+          <button class="primary" type="submit">${isProfileEdit ? "Save changes" : "Finish setup"}</button>
         </div>
       </form>
     </section>
@@ -1410,10 +1783,13 @@ function renderClientDetailsForm() {
 }
 
 function renderWorkerOnboarding() {
-  const stage = routeMeta.stage || "register";
+  const worker = getWorker() || findUserByEmail(routeMeta.email || "");
+  const stage =
+    routeMeta.stage ||
+    (!worker ? "register" : !worker.emailVerificationSentAt ? "register" : !worker.emailVerifiedAt ? "verify" : !onboardingCompleted(worker) ? "details" : "details");
+  if (stage === "register") return renderWorkerRegistrationScreen();
   if (stage === "details") return renderWorkerDetailsForm();
-  if (stage === "verify") return renderWorkerVerificationScreen();
-  return renderWorkerRegistrationScreen();
+  return renderWorkerVerificationScreen();
 }
 
 function renderWorkerRegistrationScreen() {
@@ -1421,70 +1797,61 @@ function renderWorkerRegistrationScreen() {
     <section class="form-page">
       <div class="section-heading">
         <p class="eyebrow">Student sign up</p>
-        <h1>Create your student account</h1>
+        <h1>Create your account</h1>
+        <p class="muted">Enter an email and password to get started. We’ll send a verification code right after you submit.</p>
       </div>
-      <div class="verification-layout verification-layout--vertical">
-        <form class="profile-form" id="workerOnboardingForm">
-          <div class="verification-card">
-            <h3>Account details</h3>
-            <p>Enter your email and password, then submit to receive your verification code.</p>
-            <label>
-              <span>Email address</span>
-              <input type="email" name="email" placeholder="name@example.com" required />
-            </label>
-            ${passwordFieldMarkup("password", "Create password")}
+      <form class="profile-form" id="workerOnboardingForm" data-form="worker-register">
+        <div class="verification-card">
+          <label>
+            <span>Email</span>
+            <input type="email" name="email" value="" placeholder="name@example.com" autocomplete="username" required />
+          </label>
+          ${passwordFieldMarkup("password", "Create password", "new-password")}
+          <div class="verification-status">
+            We’ll send a verification code after you submit this form.
           </div>
-          <div class="form-actions onboarding-actions">
-            <button class="primary" type="submit">Submit</button>
-            <button class="text-link" type="button" data-view="create-account">Back</button>
-          </div>
-        </form>
-      </div>
+        </div>
+        <div class="form-actions onboarding-actions">
+          <button class="primary" type="submit">Submit</button>
+        </div>
+      </form>
     </section>
   `;
 }
 
 function renderWorkerVerificationScreen() {
   const worker = getWorker();
-  const emailVerificationCode = worker.emailVerificationCode || "";
-  const emailVerificationSent = Boolean(worker.emailVerificationSentAt);
-  const allVerified = Boolean(worker.emailVerifiedAt);
-
   return `
     <section class="form-page">
-      <div class="section-heading">
-        <p class="eyebrow">Student sign up</p>
-        <h1>Verify your student email first</h1>
+      <div class="section-heading section-heading--with-actions">
+        <div>
+          <p class="eyebrow">Student sign up</p>
+          <h1>Verify your email</h1>
+          <p class="muted">A verification code has been sent to your email address. Please enter the code below to verify your account.</p>
+        </div>
+        <div class="section-actions">
+          <button class="secondary small" type="button" data-view="create-account">Back</button>
+        </div>
       </div>
       <div class="verification-layout verification-layout--vertical">
-        <form class="profile-form" id="workerOnboardingForm">
-          <div class="verification-card">
-            <h3>Student email verification</h3>
-            <p>A verification code has been sent to your email address. Please enter the code below to verify your account.</p>
-            <label>
-              <span>Verification code</span>
-              <input
-                type="text"
-                name="emailVerificationCode"
-                inputmode="numeric"
-                maxlength="8"
-                value="${escapeHtml(emailVerificationCode)}"
-                placeholder="Enter the 8 digit code"
-                ${emailVerificationSent ? "required" : ""}
-              />
-            </label>
-            <div class="verification-status ${worker.emailVerifiedAt ? "is-confirmed" : ""}">
-              ${worker.emailVerifiedAt ? "Email verified. Please sign in." : emailVerificationSent ? "Code sent. Enter it to continue." : "No code sent yet."}
-            </div>
+        <form class="profile-form" id="workerOnboardingForm" data-form="worker-verify">
+          <label>
+            <span>Verification code</span>
+            <input
+              type="text"
+              name="emailVerificationCode"
+              inputmode="numeric"
+              maxlength="8"
+              placeholder="Enter the 8 digit code"
+              required
+            />
+          </label>
+          <div class="verification-status ${worker.emailVerifiedAt ? "is-confirmed" : ""}">
+            ${worker.emailVerifiedAt ? "Email verified. Please sign in to continue." : "Enter the code you received by email."}
           </div>
-
-          <div class="form-actions onboarding-actions">
-            <button class="secondary small" type="button" data-action="send-worker-email-code">
-              ${emailVerificationSent ? "Resend code" : "Send code"}
-            </button>
-            <button class="ghost small" type="button" data-action="verify-worker-email-code" ${emailVerificationSent ? "" : "disabled"}>
-              Verify student email
-            </button>
+          <div class="form-actions onboarding-actions verification-actions">
+            <button class="secondary small" type="button" data-action="send-worker-email-code">Resend code</button>
+            <button class="primary" type="button" data-action="verify-worker-email-code">Verify code</button>
           </div>
         </form>
       </div>
@@ -1494,15 +1861,25 @@ function renderWorkerVerificationScreen() {
 
 function renderWorkerDetailsForm() {
   const worker = getWorker();
+  const isProfileEdit = routeMeta.mode === "edit";
   const onboarding = onboardingInfo(worker);
-  const nameFieldValue = onboardingCompleted(worker) ? (onboarding.preferredName || worker.name || "") : "";
   return `
     <section class="form-page">
-      <div class="section-heading">
-        <p class="eyebrow">Student sign up</p>
-        <h1>Set up your student profile</h1>
+      <div class="section-heading section-heading--with-actions">
+        <div>
+          <p class="eyebrow">Student profile</p>
+          <h1>${isProfileEdit ? "Edit your profile" : "Finish your setup"}</h1>
+          <p class="muted">${isProfileEdit ? "Update the details below whenever you want." : "A few quick details help us match you with the right jobs."}</p>
+        </div>
+        <div class="section-actions">
+          ${isProfileEdit ? `<button class="secondary small" type="button" data-action="back-from-profile-edit">Back</button>` : ""}
+        </div>
       </div>
-      <form class="profile-form" id="workerOnboardingForm">
+      <form class="profile-form" id="workerOnboardingForm" data-form="worker-details">
+        <div class="onboarding-progress" aria-hidden="true">
+          <span class="onboarding-progress__label">Step 2 of 2</span>
+          <div class="onboarding-progress__track"><span class="onboarding-progress__bar" style="width:100%"></span></div>
+        </div>
         <div class="worker-profile-row">
           <div class="photo-uploader">
             ${renderAvatar(worker, "large")}
@@ -1513,8 +1890,15 @@ function renderWorkerDetailsForm() {
           </div>
           <div class="form-grid onboarding-grid">
             <label>
-              <span>What name would you like us to call you?</span>
-              <input type="text" name="name" value="${escapeHtml(nameFieldValue)}" placeholder="Jordan Taylor" required />
+              <span>Preferred name</span>
+              <input type="text" name="name" placeholder="Jordan Taylor" value="${routeMeta.mode === "edit" ? escapeHtml(worker.name) : escapeHtml(onboarding.preferredName || "")}" required />
+            </label>
+            <label>
+              <span>Age range</span>
+              <select name="ageRange" required>
+                <option value="">Choose one</option>
+                ${AGE_RANGE_OPTIONS.map((option) => `<option value="${escapeHtml(option.value)}" ${String(onboarding.ageRange || ageRangeForWorker(worker.age)) === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+              </select>
             </label>
             <label>
               <span>Email</span>
@@ -1525,60 +1909,17 @@ function renderWorkerDetailsForm() {
               <input type="tel" name="phone" value="${escapeHtml(worker.phone || "")}" placeholder="Optional" />
             </label>
             <label>
-              <span>Age range</span>
-              <select name="ageRange" required>
-                ${AGE_RANGE_OPTIONS.map((option) => `<option value="${escapeHtml(option.value)}" ${((onboarding.ageRange || ageRangeForWorker(worker.age)) === option.value) ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
-              </select>
-            </label>
-            <label>
               <span>Postal code</span>
-              <input type="text" name="postalCode" value="${escapeHtml(onboarding.postalCode || userPostalCode(worker))}" placeholder="8092" required />
+              <input type="text" name="postalCode" value="${escapeHtml(userPostalCode(worker))}" placeholder="Enter your postal code" required />
             </label>
             <label>
               <span>Locality</span>
-              <input type="text" name="location" value="${escapeHtml(onboarding.locality || worker.location)}" placeholder="Zurich" required />
+              <input type="text" name="locality" value="${escapeHtml(worker.location)}" placeholder="Detected from your postal code" required />
             </label>
-            <label>
-              <span>School</span>
-              <input type="text" name="school" value="${escapeHtml(worker.school)}" required />
-            </label>
-            <label>
-              <span>What languages do you speak?</span>
-              <select name="language" multiple size="4" required>${languageOptions(onboarding.languages || worker.language)}</select>
-            </label>
-          </div>
-        </div>
-        <label>
-          <span>Parent email</span>
-          <input type="email" name="parentEmail" value="${escapeHtml(worker.parentEmail)}" required />
-        </label>
-        <div class="verification-card ${worker.emailVerifiedAt ? "" : "is-disabled"}">
-          <h3>Parent verification</h3>
-          <p>We will send an 8 digit code to the parent email once the student email is verified.</p>
-          <div class="verification-row">
-            <button class="secondary small" type="button" data-action="send-parent-code" ${worker.emailVerifiedAt ? "" : "disabled"}>
-              ${worker.parentVerificationSentAt ? "Resend code" : "Send code"}
-            </button>
-            <span class="verification-email">${escapeHtml(worker.parentEmail || "Parent email needed first")}</span>
-          </div>
-          <label>
-            <span>Parent verification code</span>
-            <input
-              type="text"
-              name="parentVerificationCode"
-              inputmode="numeric"
-              maxlength="8"
-              placeholder="Enter the 8 digit code"
-              ${worker.parentVerificationSentAt ? "required" : ""}
-            />
-          </label>
-          <div class="verification-status ${worker.parentConfirmed ? "is-confirmed" : ""}">
-            ${worker.parentConfirmed ? "Parent verified." : worker.parentVerificationSentAt ? "Code sent. Enter it to continue." : "No code sent yet."}
-          </div>
-          <div class="form-actions onboarding-actions">
-            <button class="ghost small" type="button" data-action="verify-parent-code" ${worker.parentVerificationSentAt ? "" : "disabled"}>
-              Verify parent code
-            </button>
+            <fieldset class="form-grid__full">
+              <legend>What languages do you speak?</legend>
+              <div class="check-grid">${languageCheckboxes(worker.languages || worker.language)}</div>
+            </fieldset>
           </div>
         </div>
         <label>
@@ -1587,9 +1928,9 @@ function renderWorkerDetailsForm() {
         </label>
         <fieldset>
           <legend>Services offered</legend>
-          <div class="check-grid">${serviceCheckboxes(worker.services)}</div>
+          <div class="check-grid">${serviceCheckboxes(worker.services, true)}</div>
         </fieldset>
-        <div class="more-service-card">
+        <div class="more-service-card" ${hasOtherService(worker.services) ? "" : "hidden"}>
           <h3>More service</h3>
           <label>
             <span>Write another job or service you can offer</span>
@@ -1605,7 +1946,7 @@ function renderWorkerDetailsForm() {
           <input type="text" name="certifications" value="${escapeHtml(worker.certifications.join(", "))}" required />
         </label>
         <div class="form-actions">
-          <button class="primary" type="submit">Finish setup</button>
+          <button class="primary" type="submit">${isProfileEdit ? "Save changes" : "Finish setup"}</button>
         </div>
       </form>
     </section>
@@ -1619,6 +1960,7 @@ function renderClientDashboard() {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   const activeJobs = clientJobs.filter((job) => job.status !== "Completed");
   const clientNotifications = buildClientNotifications(client);
+  const clientUnreadCount = clientNotifications.filter((item) => item.unread).length;
 
   return `
     <section class="dashboard-shell">
@@ -1626,17 +1968,19 @@ function renderClientDashboard() {
         <div>
           <p class="eyebrow">Client dashboard</p>
           <h1>Welcome, ${escapeHtml(client.name)}</h1>
-          <p>${escapeHtml(client.location)} jobs and live requests. Language: ${escapeHtml(client.language)}.</p>
+          <p>${escapeHtml(client.location)} jobs and live requests. Language: ${escapeHtml(languageDisplay(client.languages || client.language))}.</p>
         </div>
-        <div class="dashboard-actions">
-          <button class="icon-button" type="button" data-action="toggle-client-notifications" aria-expanded="${clientNotificationsOpen ? "true" : "false"}" aria-label="Client notifications">
-            🔔
+      <div class="dashboard-actions">
+          <button class="icon-button" type="button" data-action="open-messages" aria-label="Open messages">
+            💬
           </button>
-          <button class="secondary" data-view="onboard-client" data-stage="details">Edit profile</button>
+          <button class="icon-button" type="button" data-action="open-notifications" aria-label="Client notifications">
+            🔔
+            ${clientUnreadCount ? `<span class="icon-badge">${clientUnreadCount}</span>` : ""}
+          </button>
+          <button class="secondary" data-view="onboard-client" data-stage="details" data-mode="edit">Edit profile</button>
         </div>
       </div>
-
-      ${clientNotificationsOpen ? renderNotificationPanel("Notifications", clientNotifications, "No job requests yet.") : ""}
 
       <section class="dashboard-section">
         <div class="panel-heading">
@@ -1681,7 +2025,7 @@ function renderClientDashboard() {
               </label>
               <label>
                 <span>Currency</span>
-                <select name="currency" required>${currencyOptions(client.preferredCurrency || "USD")}</select>
+            <select name="currency" required>${currencyOptions(client.preferredCurrency || "CHF")}</select>
               </label>
               <label>
                 <span>Estimated hours</span>
@@ -1693,6 +2037,43 @@ function renderClientDashboard() {
               <span>Negotiable</span>
             </label>
             <button class="primary full" type="submit">Post job</button>
+            <div class="post-visual-stack" aria-hidden="true">
+              <div class="post-visual-stack__top">
+                <span class="visual-badge visual-badge--green">Live preview</span>
+                <span class="post-visual-stack__meta">Looks like the public feed</span>
+              </div>
+              <div class="post-visual-stage">
+                <div class="post-visual-main">
+                  <div class="post-visual-main__head">
+                    <strong>Walk the dog after school</strong>
+                    <span>Today · 3 applicants</span>
+                  </div>
+                  <div class="post-visual-chips">
+                    <span>Fixed</span>
+                    <span>CHF 40</span>
+                    <span>Negotiable</span>
+                  </div>
+                  <div class="post-visual-profiles">
+                    ${["Maya", "Eli", "Nia"].map((name, index) => `<span style="--delay:${index * 90}ms">${escapeHtml(name)}</span>`).join("")}
+                  </div>
+                </div>
+                <div class="post-visual-side">
+                  <div class="post-visual-mini-card post-visual-mini-card--accent">
+                    <strong>Nearby matches</strong>
+                    <span>Students with pet care experience</span>
+                  </div>
+                  <div class="post-visual-mini-card">
+                    <strong>Request feed</strong>
+                    <span>New applications slide in instantly</span>
+                  </div>
+                </div>
+              </div>
+              <div class="post-visual-footer">
+                <span>Job posted</span>
+                <span>Client inbox</span>
+                <span>Student feed</span>
+              </div>
+            </div>
           </form>
         </section>
 
@@ -1747,7 +2128,6 @@ function renderClientRequestInbox(clientJobs) {
 }
 
 function renderClientJobCard(job) {
-  const matches = matchWorkers(job);
   const acceptedWorker = job.acceptedWorkerId ? getWorker(job.acceptedWorkerId) : null;
 
   return `
@@ -1777,11 +2157,16 @@ function renderClientJobCard(job) {
                 <span>${job.status === "Completed" ? "Completed this job" : "Accepted and in progress"}</span>
                 <small>${escapeHtml(ratingSummary(acceptedWorker))}</small>
               </div>
-              ${
-                job.status === "In Progress"
-                  ? `<button class="primary small" data-action="complete-job" data-job-id="${job.id}">Approve completion</button>`
-                  : ""
-              }
+              <div class="accepted-strip__actions">
+                ${
+                  job.status === "In Progress"
+                    ? `<button class="primary small" data-action="complete-job" data-job-id="${job.id}">Approve completion</button>`
+                    : ""
+                }
+                <button class="secondary small" type="button" data-action="open-conversation" data-job-id="${escapeHtml(job.id)}">
+                  Message
+                </button>
+              </div>
             </div>
           `
           : ""
@@ -1798,34 +2183,6 @@ function renderClientJobCard(job) {
         }
       </div>
 
-      ${
-        job.status === "Open"
-          ? `
-            <div class="job-subsection">
-              <h4>Suggested students</h4>
-              ${
-                matches.length
-                  ? matches
-                      .map(
-                        ({ worker, score }) => `
-                          <div class="suggested-row">
-                            ${renderAvatar(worker)}
-                            <div>
-                              ${profileButton(worker)}
-                              <span>${chipList(worker.services.slice(0, 3), "soft")}</span>
-                              <small>${escapeHtml(ratingSummary(worker))}</small>
-                            </div>
-                            <small>${score}% fit</small>
-                          </div>
-                        `
-                      )
-                      .join("")
-                  : `<p class="muted">No matches yet for this category.</p>`
-              }
-            </div>
-          `
-          : ""
-      }
     </article>
   `;
 }
@@ -1870,12 +2227,13 @@ function renderApplicationRow(job, application) {
   const client = getClient(job.clientId);
   const canAccept = job.status === "Open" && application.status === "Applied";
   const nextTimed = alreadyNextTimed(worker, client.id, job.id);
+  const canMessage = Boolean(job.acceptedWorkerId === worker.id || application.status === "Accepted");
   return `
     <div class="application-row">
       ${renderAvatar(worker)}
       <div class="application-copy">
         ${profileButton(worker)}
-                <span>Age range ${escapeHtml(workerAgeLabel(worker))}. ${escapeHtml(worker.school)}. Speaks ${escapeHtml(worker.language)}.</span>
+        <span>${escapeHtml(worker.age)} years old, ${escapeHtml(worker.school)}. Speaks ${escapeHtml(languageDisplay(worker.languages || worker.language))}.</span>
         <small>Applied ${dateTimeLabel(application.appliedAt)} at ${escapeHtml(paymentLabel(job))}. ${escapeHtml(ratingSummary(worker))}</small>
       </div>
       <span class="pill">${escapeHtml(application.status)}</span>
@@ -1883,6 +2241,11 @@ function renderApplicationRow(job, application) {
         <button class="secondary small" data-action="next-time" data-job-id="${job.id}" data-worker-id="${worker.id}" ${nextTimed ? "disabled" : ""}>
           ${nextTimed ? "Next Timed" : "Next Time"}
         </button>
+        ${
+          canMessage
+            ? `<button class="secondary small" type="button" data-action="open-conversation" data-job-id="${escapeHtml(job.id)}">Message</button>`
+            : ""
+        }
         ${canAccept ? `<button class="primary small" data-action="accept-application" data-job-id="${job.id}" data-worker-id="${worker.id}">Accept</button>` : ""}
       </div>
     </div>
@@ -1896,6 +2259,7 @@ function renderWorkerDashboard() {
   const feedJobs = getFilteredFeedJobs(worker.id);
   const nextTimes = worker.nextTimes || [];
   const workerNotifications = buildWorkerNotifications(worker);
+  const workerUnreadCount = workerNotifications.filter((item) => item.unread).length;
 
   return `
     <section class="dashboard-shell">
@@ -1905,19 +2269,21 @@ function renderWorkerDashboard() {
           <div>
             <p class="eyebrow">Student dashboard</p>
             <h1>${escapeHtml(worker.name)}</h1>
-            <p>${escapeHtml(worker.location)}. Age range ${escapeHtml(workerAgeLabel(worker))}. Speaks ${escapeHtml(worker.language)}. Parent confirmed.</p>
+            <p>${escapeHtml(worker.location)}. ${escapeHtml(worker.age)} years old. Speaks ${escapeHtml(languageDisplay(worker.languages || worker.language))}.</p>
             <span class="profile-rating">${escapeHtml(ratingSummary(worker))}</span>
           </div>
         </div>
         <div class="dashboard-actions">
-          <button class="icon-button" type="button" data-action="toggle-worker-notifications" aria-expanded="${workerNotificationsOpen ? "true" : "false"}" aria-label="Student notifications">
-            🔔
+          <button class="icon-button" type="button" data-action="open-messages" aria-label="Open messages">
+            💬
           </button>
-          <button class="secondary" data-view="onboard-worker" data-stage="details">Edit profile</button>
+          <button class="icon-button" type="button" data-action="open-notifications" aria-label="Student notifications">
+            🔔
+            ${workerUnreadCount ? `<span class="icon-badge">${workerUnreadCount}</span>` : ""}
+          </button>
+          <button class="secondary" data-view="onboard-worker" data-stage="details" data-mode="edit">Edit profile</button>
         </div>
       </div>
-
-      ${workerNotificationsOpen ? renderNotificationPanel("Notifications", workerNotifications, "No updates yet.") : ""}
 
       <div class="metric-grid">
         <article class="metric-card">
@@ -1988,6 +2354,11 @@ function renderWorkerDashboard() {
                       <span>${escapeHtml(job.status)}. ${escapeHtml(job.category)}. ${escapeHtml(paymentLabel(job))}</span>
                       <small>Applied ${dateTimeLabel(application.appliedAt)}</small>
                     </div>
+                    ${
+                      job.acceptedWorkerId === worker.id || application.status === "Accepted"
+                        ? `<button class="secondary small" type="button" data-action="open-conversation" data-job-id="${escapeHtml(job.id)}">Message</button>`
+                        : ""
+                    }
                   </article>
                 `
               )
@@ -2022,6 +2393,156 @@ function renderWorkerDashboard() {
           }
         </div>
       </section>
+    </section>
+  `;
+}
+
+function renderMessagesView() {
+  const session = readSession();
+  if (!session) {
+    return `
+      <section class="messages-shell messages-shell--locked">
+        <div class="access-page panel">
+          <p class="eyebrow">Messages</p>
+          <h1>Sign in to open messages</h1>
+          <p class="muted">This conversation stays private. Please sign in to continue.</p>
+          <div class="action-row">
+            <button class="primary" data-view="login">Sign in</button>
+            <button class="secondary" data-view="landing">Home</button>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  const conversations = getAccessibleConversations(session.role, session.id);
+  const activeConversationId = routeMeta.conversationId || conversations[0]?.id || "";
+  const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) || conversations[0] || null;
+  const activeMessages = activeConversation ? getConversationMessages(activeConversation.id) : [];
+  const { job, client, worker } = activeConversation ? getConversationParticipants(activeConversation) : {};
+  const partner = session.role === "client" ? worker : client;
+  const previewName = partner ? partner.name : "Conversation";
+  if (routeMeta.conversationId && !activeConversation) {
+    return `
+      <section class="messages-shell messages-shell--locked">
+        <div class="access-page panel">
+          <p class="eyebrow">Messages</p>
+          <h1>Conversation unavailable</h1>
+          <p class="muted">You do not have access to this conversation, or it does not exist.</p>
+          <div class="action-row">
+            <button class="primary" data-action="go-back-from-messages">Back</button>
+            <button class="secondary" data-view="${session.role === "client" ? "client-dashboard" : "worker-dashboard"}">Dashboard</button>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="messages-shell">
+      <div class="section-heading section-heading--with-actions">
+        <div>
+          <p class="eyebrow">Messages</p>
+          <h1>Private job chat</h1>
+          <p class="muted">Only the client and the accepted student can see these conversations.</p>
+        </div>
+        <div class="section-actions">
+          <button class="secondary small" type="button" data-action="go-back-from-messages">Back</button>
+        </div>
+      </div>
+
+      <div class="messages-layout">
+        <aside class="messages-list panel">
+          <div class="panel-heading">
+            <h2>Conversations</h2>
+            <span class="pill">${conversations.length}</span>
+          </div>
+          <div class="conversation-list">
+            ${
+              conversations.length
+                ? conversations
+                    .map((conversation) => {
+                      const { job: conversationJob } = getConversationParticipants(conversation);
+                      const selected = conversation.id === activeConversation?.id;
+                      const unreadCount = conversation.unreadCount || 0;
+                      const otherName = conversationPartnerName(conversation, session.role);
+                      const avatarSource =
+                        session.role === "client"
+                          ? getWorker(conversation.workerId) || { name: otherName, photo: "" }
+                          : getClient(conversation.clientId) || { name: otherName, photo: "" };
+                      return `
+                        <button class="conversation-item ${selected ? "is-selected" : ""} ${unreadCount ? "is-unread" : ""}" type="button" data-action="open-conversation" data-conversation-id="${escapeHtml(conversation.id)}">
+                          ${renderAvatar(avatarSource)}
+                          <div>
+                            <strong>${escapeHtml(otherName)}</strong>
+                            <span>${escapeHtml(conversationJob?.title || "Accepted job")}</span>
+                            <small>${escapeHtml(conversationPreview(conversation, session.role, session.id))}</small>
+                          </div>
+                          ${unreadCount ? `<span class="pill tiny">${unreadCount}</span>` : ""}
+                        </button>
+                      `;
+                    })
+                    .join("")
+                : renderEmpty("No accepted job chats yet. Once a client accepts a student, the conversation appears here.")
+            }
+          </div>
+        </aside>
+
+        <section class="messages-thread panel ${activeConversation ? "" : "messages-thread--empty"}">
+          ${
+            activeConversation
+              ? `
+                <div class="panel-heading">
+                  <div class="conversation-head">
+                    ${renderAvatar(partner || { name: previewName, photo: "" })}
+                    <div>
+                      <h2>${escapeHtml(previewName)}</h2>
+                      <span>${escapeHtml(job?.title || "Accepted job")} · ${escapeHtml(job?.category || "")}</span>
+                    </div>
+                  </div>
+                  <span class="pill">${escapeHtml(job?.status || "Open")}</span>
+                </div>
+                <div class="message-stream" aria-live="polite">
+                  ${
+                    activeMessages.length
+                      ? activeMessages
+                          .map((message) => {
+                            const sentByMe = message.senderId === session.id;
+                            return `
+                              <article class="message-bubble ${sentByMe ? "sent" : "received"}">
+                                <p>${escapeHtml(message.content)}</p>
+                                <small>${escapeHtml(dateTimeLabel(message.createdAt))}</small>
+                              </article>
+                            `;
+                          })
+                          .join("")
+                      : `
+                        <div class="empty-state empty-state--message">
+                          Start the conversation with a short hello.
+                        </div>
+                      `
+                  }
+                </div>
+                <form class="message-composer" data-conversation-id="${escapeHtml(activeConversation.id)}" id="messageForm">
+                  <label>
+                    <span>Message</span>
+                    <textarea name="message" rows="3" placeholder="Write a private message">${escapeHtml(messageDrafts[activeConversation.id] || "")}</textarea>
+                  </label>
+                  ${messageSendError ? `<div class="form-error">${escapeHtml(messageSendError)}</div>` : ""}
+                  <div class="message-composer__actions">
+                    <span class="muted">Enter sends the message. Shift + Enter makes a new line.</span>
+                    <button class="primary" type="submit" ${messageSendBusy ? "disabled" : ""}>${messageSendBusy ? "Sending..." : "Send"}</button>
+                  </div>
+                </form>
+              `
+              : `
+                <div class="empty-state empty-state--message">
+                  Select an accepted job to open the private conversation.
+                </div>
+              `
+          }
+        </section>
+      </div>
     </section>
   `;
 }
@@ -2079,133 +2600,8 @@ function renderWorkerJobCard(job, worker) {
   `;
 }
 
-function renderParentMonitor() {
-  const parent = getParent();
-  const worker = getWorker(parent.linkedWorkerId);
-  const applications = getApplicationsForWorker(worker.id);
-  const inProgress = state.jobs.filter((job) => job.status === "In Progress" && job.acceptedWorkerId === worker.id);
-  const completed = state.jobs.filter((job) => job.status === "Completed" && job.acceptedWorkerId === worker.id);
-  const events = state.parentEvents.filter((event) => event.workerId === worker.id);
-
-  return `
-    <section class="dashboard-shell">
-      <div class="dashboard-heading">
-        <div>
-          <p class="eyebrow">Parent monitor</p>
-          <h1>${escapeHtml(parent.name)}'s safety view</h1>
-          <p>Linked to ${escapeHtml(worker.name)}. Read-only access.</p>
-        </div>
-      </div>
-
-      <div class="metric-grid">
-        <article class="metric-card">
-          <span>Total earned</span>
-          <strong>${formatTotals(workerEarningsTotals(worker.id))}</strong>
-        </article>
-        <article class="metric-card">
-          <span>Applied jobs</span>
-          <strong>${applications.length}</strong>
-        </article>
-        <article class="metric-card">
-          <span>In progress</span>
-          <strong>${inProgress.length}</strong>
-        </article>
-        <article class="metric-card">
-          <span>Next Timed</span>
-          <strong>${(worker.nextTimes || []).length}</strong>
-        </article>
-      </div>
-
-      <div class="two-column">
-        <section class="panel">
-          <div class="panel-heading">
-            <h2>Child profile</h2>
-            <span class="pill">View only</span>
-          </div>
-          <div class="profile-summary">
-            ${renderAvatar(worker, "large")}
-            <div>
-              <h3>${escapeHtml(worker.name)}</h3>
-              <p>Age range ${escapeHtml(workerAgeLabel(worker))}. ${escapeHtml(worker.school)}. ${escapeHtml(worker.location)}. Speaks ${escapeHtml(worker.language)}.</p>
-              <div class="chip-row">${chipList(worker.services, "blue")}</div>
-              <span class="profile-rating">${escapeHtml(ratingSummary(worker))}</span>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-heading">
-            <h2>Safety email log</h2>
-            <span>${events.length} updates</span>
-          </div>
-          <div class="event-list">
-            ${
-              events
-                .map(
-                  (event) => `
-                    <article class="event-item">
-                      <strong>${escapeHtml(event.type)}</strong>
-                      <span>${escapeHtml(event.message)}</span>
-                      <small>${dateTimeLabel(event.createdAt)}</small>
-                    </article>
-                  `
-                )
-                .join("") || renderEmpty("No parent updates yet.")
-            }
-          </div>
-        </section>
-      </div>
-
-      <section class="dashboard-section">
-        <div class="panel-heading">
-          <h2>Job activity</h2>
-          <span>${applications.length} applications</span>
-        </div>
-        <div class="parent-job-list">
-          ${
-            applications
-              .map(
-                ({ job, application }) => `
-                  <article class="parent-job-row">
-                    <div>
-                      <strong>${escapeHtml(job.title)}</strong>
-                      <span>${escapeHtml(job.category)}. ${escapeHtml(job.status)}. ${formatDate(job.date)}</span>
-                      <small>Application status: ${escapeHtml(application.status)}</small>
-                    </div>
-                    <strong>${escapeHtml(paymentLabel(job))}</strong>
-                  </article>
-                `
-              )
-              .join("") || renderEmpty("No job activity yet.")
-          }
-        </div>
-      </section>
-
-      <section class="dashboard-section">
-        <div class="panel-heading">
-          <h2>Earnings history</h2>
-          <span>${completed.length} completed</span>
-        </div>
-        <div class="parent-job-list">
-          ${
-            completed
-              .map(
-                (job) => `
-                  <article class="parent-job-row">
-                    <div>
-                      <strong>${escapeHtml(job.title)}</strong>
-                      <span>${formatDate(job.date)}. Approved by ${escapeHtml(getClient(job.clientId).name)}.</span>
-                    </div>
-                    <strong>${formatMoney(jobTotal(job), job.currency)}</strong>
-                  </article>
-                `
-              )
-              .join("") || renderEmpty("Completed earnings will appear here.")
-          }
-        </div>
-      </section>
-    </section>
-  `;
+function renderSafetyMonitor() {
+  return "";
 }
 
 function renderEmpty(message) {
@@ -2213,33 +2609,6 @@ function renderEmpty(message) {
 }
 
 function bindCommonEvents() {
-  const reviewForm = document.querySelector("#reviewForm");
-  if (reviewForm) {
-    reviewForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const session = readSession();
-      const user = getSessionUser();
-      if (!session || !user) {
-        navigate("login");
-        return;
-      }
-      const formData = new FormData(reviewForm);
-      const stars = Math.max(1, Math.min(5, Number(formData.get("stars")) || 5));
-      const comment = String(formData.get("comment") || "").trim();
-      if (!Array.isArray(state.appReviews)) state.appReviews = [];
-      state.appReviews.unshift({
-        id: `review-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
-        name: user.name || "Anonymous",
-        role: session.role || "user",
-        stars,
-        comment,
-        createdAt: new Date().toISOString()
-      });
-      await saveState();
-      navigate("landing");
-    });
-  }
-
   document.querySelectorAll("[data-action='toggle-logo-menu']").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -2250,46 +2619,13 @@ function bindCommonEvents() {
     });
   });
 
-  document.querySelectorAll("[data-action='toggle-client-notifications']").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      clientNotificationsOpen = !clientNotificationsOpen;
-      workerNotificationsOpen = false;
-      logoMenuOpen = false;
-      render();
-    });
-  });
-
-  document.querySelectorAll("[data-action='toggle-worker-notifications']").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      workerNotificationsOpen = !workerNotificationsOpen;
-      clientNotificationsOpen = false;
-      logoMenuOpen = false;
-      render();
-    });
-  });
-
-  document.querySelectorAll("[data-action='open-client-profile']").forEach((button) => {
-    button.addEventListener("click", () => {
-      activateTestAccount("client");
-      navigate("client-dashboard");
-    });
-  });
-
-  document.querySelectorAll("[data-action='open-worker-profile']").forEach((button) => {
-    button.addEventListener("click", () => {
-      activateTestAccount("worker");
-      navigate("worker-dashboard");
-    });
-  });
-
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", () => {
       const next = button.dataset.view;
       const meta = {};
       if (button.dataset.role) meta.role = button.dataset.role;
       if (button.dataset.stage) meta.stage = button.dataset.stage;
+      if (button.dataset.mode) meta.mode = button.dataset.mode;
       if (!meta.stage && String(next || "").startsWith("onboard-")) meta.stage = "register";
       navigate(next, meta);
     });
@@ -2300,6 +2636,78 @@ function bindCommonEvents() {
       event.stopPropagation();
       profileModalWorkerId = button.dataset.workerId;
       render();
+    });
+  });
+
+  document.querySelectorAll("[data-action='open-conversation']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const conversationId = button.dataset.conversationId || "";
+      const jobId = button.dataset.jobId || "";
+      const session = readSession();
+      if (!session) return;
+      const conversation = conversationId ? getConversationById(conversationId) : jobId ? openConversationForJob(jobId) : null;
+      if (!conversation) return;
+      const nextConversationId = conversation.id;
+      const returnTo = routeMeta.returnTo || pathForView(view, routeMeta);
+      routeMeta = { conversationId: nextConversationId, returnTo };
+      navigate("messages", { conversationId: nextConversationId, returnTo });
+      if (markConversationRead(nextConversationId)) {
+        render();
+      }
+      if (session.role === "client") writeNotificationSeenAt("client", session.id);
+      if (session.role === "worker") writeNotificationSeenAt("worker", session.id);
+    });
+  });
+
+  document.querySelectorAll("[data-action='open-notifications']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const session = readSession();
+      if (!session) return;
+      const returnTo = pathForView(view, routeMeta);
+      routeMeta = { returnTo };
+      writeNotificationSeenAt(session.role, session.id);
+      navigate("notifications", { returnTo });
+    });
+  });
+
+  document.querySelectorAll("[data-action='open-messages']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const session = readSession();
+      if (!session) return;
+      const returnTo = pathForView(view, routeMeta);
+      routeMeta = { returnTo };
+      navigate("messages", { returnTo });
+    });
+  });
+
+  document.querySelectorAll("[data-action='open-client-profile']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const session = readSession();
+      if (session?.role === "client") {
+        navigate("client-dashboard");
+        return;
+      }
+      navigate("onboard-client", { role: "client", stage: "register" });
+    });
+  });
+
+  document.querySelectorAll("[data-action='open-worker-profile']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const session = readSession();
+      if (session?.role === "worker") {
+        navigate("worker-dashboard");
+        return;
+      }
+      navigate("onboard-worker", { role: "worker", stage: "register" });
+    });
+  });
+
+  document.querySelectorAll("[data-action='open-request']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const session = readSession();
+      if (!session) return;
+      if (session.role === "client") navigate("client-dashboard");
+      if (session.role === "worker") navigate("worker-dashboard");
     });
   });
 
@@ -2320,57 +2728,81 @@ function bindCommonEvents() {
     });
   });
 
-  document.querySelectorAll("[data-password-toggle]").forEach((button) => {
+  document.querySelectorAll("[data-action='back-from-profile-edit']").forEach((button) => {
     button.addEventListener("click", () => {
-      const target = document.getElementById(button.dataset.passwordToggle);
-      if (!target) return;
-      const nextVisible = target.type === "password";
-      target.type = nextVisible ? "text" : "password";
-      button.setAttribute("aria-pressed", String(nextVisible));
-      button.setAttribute("aria-label", nextVisible ? "Hide password" : "Show password");
-      button.innerHTML = typeof icon === "function" ? icon(nextVisible ? "eye-off" : "eye") : nextVisible ? "🙈" : "👁";
-      target.focus();
-      const end = target.value.length;
-      try {
-        target.setSelectionRange(end, end);
-      } catch {
-        // ignore
+      const session = readSession();
+      if (session?.role === "worker") {
+        navigate("worker-dashboard");
+        return;
       }
+      if (session?.role === "client") {
+        navigate("client-dashboard");
+        return;
+      }
+      if (view === "onboard-worker") {
+        routeMeta = { ...routeMeta, stage: "verify" };
+        render();
+        return;
+      }
+      routeMeta = { ...routeMeta, stage: "verify" };
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-action='go-back-from-messages']").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (routeMeta.returnTo) {
+        window.history.back();
+        return;
+      }
+      const session = readSession();
+      navigate(session?.role === "worker" ? "worker-dashboard" : "client-dashboard");
+    });
+  });
+
+  document.querySelectorAll("[data-action='go-back-from-notifications']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const returnTo = button.dataset.returnTo || routeMeta.returnTo || "";
+      if (window.history.length > 1) {
+        window.history.back();
+        return;
+      }
+      const session = readSession();
+      navigate(returnTo || (session?.role === "worker" ? "worker-dashboard" : "client-dashboard"));
     });
   });
 }
 
 function bindViewEvents() {
   if (view === "login") bindLogin();
+  if (view === "forgot-password") bindForgotPassword();
   if (view === "onboard-client") bindClientOnboarding();
   if (view === "onboard-worker") bindWorkerOnboarding();
   if (view === "client-dashboard") bindClientDashboard();
   if (view === "worker-dashboard") bindWorkerDashboard();
+  if (view === "notifications") bindNotificationsView();
+  if (view === "messages") bindMessagesView();
+}
+
+function bindNotificationsView() {
+  const session = readSession();
+  if (!session) return;
+  writeNotificationSeenAt(session.role, session.id);
 }
 
 function bindLogin() {
   document.querySelector("#loginForm").addEventListener("submit", (event) => {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
-    const email = formData.get("email").trim();
-    const password = formData.get("password");
-    const user =
-      Object.values(state.clients).find((item) => item.email.toLowerCase() === email.toLowerCase()) ||
-      Object.values(state.workers).find((item) => item.email.toLowerCase() === email.toLowerCase()) ||
-      Object.values(state.parents).find((item) => item.email.toLowerCase() === email.toLowerCase());
+    const email = String(formData.get("email") || "").trim();
+    const password = String(formData.get("password") || "");
+    const user = findUserByEmail(email);
     if (!user) {
       showFormError(event.currentTarget, "We could not find that email.");
       return;
     }
-
     if (accountNeedsVerification(user)) {
       showFormError(event.currentTarget, "Please verify your email before signing in.");
-      return;
-    }
-
-    if (user.role === "parent" && !user.passwordHash) {
-      writeSession({ role: user.role, id: user.id });
-      navigate("parent-monitor");
       return;
     }
 
@@ -2380,156 +2812,193 @@ function bindLogin() {
       return;
     }
 
-    writeSession({ role: user.role, id: user.id });
-    if (user.role === "worker") navigate("worker-dashboard");
-    else if (user.role === "parent") navigate("parent-monitor");
-    else navigate("client-dashboard");
+    const role = accountRoleForUser(user);
+    writeSession({ role, id: user.id });
+    if (requiresOnboarding(user)) {
+      navigate(role === "worker" ? "onboard-worker" : "onboard-client", { stage: "details" });
+      return;
+    }
+    navigate(role === "worker" ? "worker-dashboard" : "client-dashboard");
+  });
+}
+
+function bindForgotPassword() {
+  const form = document.querySelector("#forgotPasswordForm");
+  if (!form) return;
+  let resetTarget = null;
+
+  document.querySelector("[data-action='send-reset-code']").addEventListener("click", () => {
+    const email = String(new FormData(form).get("email") || "").trim();
+    if (!email) {
+      showFormError(form, "Please add your email first.");
+      return;
+    }
+
+    const user =
+      Object.values(state.clients).find((item) => item.email.toLowerCase() === email.toLowerCase()) ||
+      Object.values(state.workers).find((item) => item.email.toLowerCase() === email.toLowerCase());
+    if (!user) {
+      showFormError(form, "We could not find that email.");
+      return;
+    }
+
+    resetTarget = user;
+    user.passwordResetCode = generateVerificationCode();
+    user.passwordResetSentAt = new Date().toISOString();
+    routeMeta = { ...routeMeta, email, resetNotice: "Reset link ready. Check your email and use the code on this page." };
+    saveState();
+    render();
+  });
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const formData = new FormData(form);
+    const email = String(formData.get("email") || "").trim();
+    const resetCode = String(formData.get("resetCode") || "").trim();
+    const password = String(formData.get("password") || "");
+    const confirmPassword = String(formData.get("confirmPassword") || "");
+    const user =
+      resetTarget ||
+      Object.values(state.clients).find((item) => item.email.toLowerCase() === email.toLowerCase()) ||
+      Object.values(state.workers).find((item) => item.email.toLowerCase() === email.toLowerCase());
+
+    if (!user) {
+      showFormError(form, "We could not find that email.");
+      return;
+    }
+    if (!user.passwordResetCode) {
+      showFormError(form, "Send the reset code first.");
+      return;
+    }
+    if (resetCode !== user.passwordResetCode) {
+      showFormError(form, "That reset code does not match.");
+      return;
+    }
+    if (password.length < 8) {
+      showFormError(form, "Please make your password at least 8 characters long.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      showFormError(form, "Your password entries do not match.");
+      return;
+    }
+
+    Object.assign(user, passwordRecord(password));
+    user.passwordResetCode = "";
+    user.passwordResetSentAt = "";
+    saveState();
+    routeMeta = { loginNotice: "Password updated. Please sign in with your new password." };
+    navigate("login", { loginNotice: "Password updated. Please sign in with your new password." });
   });
 }
 
 function bindClientOnboarding() {
   const form = document.querySelector("#clientOnboardingForm");
   if (!form) return;
-  const stage = routeMeta.stage || "register";
+  const stage = routeMeta.stage || (form.dataset.form === "client-register" ? "register" : form.dataset.form === "client-details" ? "details" : "verify");
   const client = getClient();
-  const hasEmailField = Boolean(form.querySelector('input[name="email"]'));
 
-  const syncDraftClient = (formData) => {
-    if (stage !== "details") return client;
-    const selectedLanguages = formData
-      .getAll("language")
-      .map((value) => String(value || "").trim())
-      .filter(Boolean);
-    const services = formData.getAll("services");
-    const preferredName = sanitizeOnboardingText(formData.get("name"));
-    const phone = sanitizeOnboardingText(formData.get("phone"));
-    const postalCode = sanitizeOnboardingText(formData.get("postalCode"));
-    const locality = sanitizeOnboardingText(formData.get("location"));
-    const about = sanitizeOnboardingText(formData.get("about"));
-    client.name = preferredName;
-    client.phone = phone;
-    client.location = locality;
-    client.language = selectedLanguages.join(", ");
-    client.preferredCurrency = String(formData.get("preferredCurrency") || client.preferredCurrency || "CHF");
-    client.typicalServices = services;
-    client.uiPreferences = {
-      ...(client.uiPreferences || {}),
-      onboarding: {
-        ...(client.uiPreferences?.onboarding || {}),
-        preferredName,
-        postalCode,
-        locality,
-        about,
-        languages: selectedLanguages,
-        interests: services,
-        preferredCurrency: client.preferredCurrency
-      }
-    };
+  const setEmailFromForm = (formData) => {
+    const nextEmail = normalizeEmail(formData.get("email"));
+    if (nextEmail && client.email !== nextEmail) {
+      client.emailVerificationCode = "";
+      client.emailVerificationSentAt = "";
+      client.emailVerifiedAt = "";
+    }
+    if (nextEmail) client.email = nextEmail;
     return client;
-  };
-
-  const submitRegistration = async (formData) => {
-    const email = normalizeEmail(formData.get("email"));
-    const password = String(formData.get("password") || "");
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      addFieldError(form, "email");
-      showFormError(form, "Please enter a valid email address.");
-      return;
-    }
-
-    if (password.length < 8) {
-      addFieldError(form, "password");
-      showFormError(form, "Please make your password at least 8 characters long.");
-      return;
-    }
-
-    const existing = findUserByEmail(email);
-    if (existing && existing.role !== "client") {
-      addFieldError(form, "email");
-      showFormError(form, "That email is already linked to another account.");
-      return;
-    }
-    if (existing && existing.emailVerifiedAt && existing.role === "client") {
-      addFieldError(form, "email");
-      showFormError(form, "That email is already in use.");
-      return;
-    }
-
-    const draft = existing && existing.role === "client" ? existing : createSignupRecord("client", email, password);
-    draft.email = email;
-    Object.assign(draft, passwordRecord(password));
-    draft.emailVerificationCode = generateVerificationCode();
-    draft.emailVerificationSentAt = new Date().toISOString();
-    draft.emailVerifiedAt = "";
-    state.selectedClientId = draft.id;
-    await saveState();
-
-    try {
-      await sendVerificationEmail({ to: draft.email, code: draft.emailVerificationCode, role: "client" });
-    } catch (error) {
-      showFormError(form, error.message || "We could not send the verification email.");
-      return;
-    }
-    routeMeta = { role: "client", stage: "verify" };
-    navigate("onboard-client", { role: "client", stage: "verify" });
-  };
-
-  const sendCode = async () => {
-    const draft = client;
-    if (!draft.email) {
-      showFormError(form, "Please add the email first.");
-      return;
-    }
-    draft.emailVerificationCode = generateVerificationCode();
-    draft.emailVerificationSentAt = new Date().toISOString();
-    draft.emailVerifiedAt = "";
-    await saveState();
-    try {
-      await sendVerificationEmail({ to: draft.email, code: draft.emailVerificationCode, role: "client" });
-    } catch (error) {
-      showFormError(form, error.message || "We could not send the verification email.");
-      return;
-    }
-    render();
-  };
-
-  const verifyCode = async () => {
-    const code = String(new FormData(form).get("emailVerificationCode") || "").trim();
-    if (!client.emailVerificationCode) {
-      showFormError(form, "Send the email code first.");
-      return;
-    }
-    if (isEmailVerificationExpired(client.emailVerificationSentAt)) {
-      showFormError(form, "That verification code has expired. Please send a new one.");
-      return;
-    }
-    if (code !== client.emailVerificationCode) {
-      showFormError(form, "That verification code does not match.");
-      return;
-    }
-    client.emailVerifiedAt = new Date().toISOString();
-    client.emailVerificationCode = "";
-    await saveState();
-    helperNotice = "";
-    navigate("login", { loginNotice: "Account verified. Please sign in." });
   };
 
   if (stage === "register") {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const formData = new FormData(form);
-      await submitRegistration(formData);
+      const email = normalizeEmail(formData.get("email"));
+      const password = String(formData.get("password") || "");
+      if (!email) {
+        showFormError(form, "Please add the email first.");
+        return;
+      }
+      if (password.length < 8) {
+        showFormError(form, "Please make your password at least 8 characters long.");
+        return;
+      }
+      const existing = findUserByEmail(email);
+      if (existing && accountRoleForUser(existing) !== "client") {
+        showFormError(form, "That email is already used for a different account.");
+        return;
+      }
+      if (existing && existing.emailVerifiedAt) {
+        showFormError(form, "That email already has a verified account. Please sign in.");
+        return;
+      }
+      const draft = existing || createSignupRecord("client", email, password);
+      draft.email = email;
+      Object.assign(draft, passwordRecord(password));
+      draft.emailVerificationCode = generateVerificationCode();
+      draft.emailVerificationSentAt = new Date().toISOString();
+      draft.emailVerifiedAt = "";
+      saveState();
+      try {
+        await sendVerificationEmail({ to: email, code: draft.emailVerificationCode, role: "client" });
+      } catch (error) {
+        showFormError(form, error.message || "We could not send the verification email.");
+        return;
+      }
+      navigate("onboard-client", { stage: "verify", email });
     });
     return;
   }
 
-  const sendCodeButton = document.querySelector("[data-action='send-client-email-code']");
-  if (sendCodeButton) sendCodeButton.addEventListener("click", sendCode);
+  if (stage === "verify") {
+    const sendCodeButton = document.querySelector("[data-action='send-client-email-code']");
+    if (sendCodeButton) {
+      sendCodeButton.addEventListener("click", async () => {
+        const draft = setEmailFromForm(new FormData(form));
+        if (!draft.email) {
+          showFormError(form, "Please add the email first.");
+          return;
+        }
+        draft.emailVerificationCode = generateVerificationCode();
+        draft.emailVerificationSentAt = new Date().toISOString();
+        draft.emailVerifiedAt = "";
+        saveState();
+        try {
+          await sendVerificationEmail({ to: draft.email, code: draft.emailVerificationCode, role: "client" });
+        } catch (error) {
+          showFormError(form, error.message || "We could not send the verification email.");
+          return;
+        }
+        render();
+      });
+    }
 
-  const verifyCodeButton = document.querySelector("[data-action='verify-client-email-code']");
-  if (verifyCodeButton) verifyCodeButton.addEventListener("click", verifyCode);
-
-  if (stage !== "details") return;
+    const verifyCodeButton = document.querySelector("[data-action='verify-client-email-code']");
+    if (verifyCodeButton) {
+      verifyCodeButton.addEventListener("click", () => {
+        const formData = new FormData(form);
+        const draft = setEmailFromForm(formData);
+        const code = String(formData.get("emailVerificationCode") || "").trim();
+        if (!draft.emailVerificationCode) {
+          showFormError(form, "Send the email code first.");
+          return;
+        }
+        if (isEmailVerificationExpired(draft.emailVerificationSentAt)) {
+          showFormError(form, "That verification code has expired. Please send a new one.");
+          return;
+        }
+        if (code !== draft.emailVerificationCode) {
+          showFormError(form, "That email code does not match.");
+          return;
+        }
+        draft.emailVerifiedAt = new Date().toISOString();
+        draft.emailVerificationCode = "";
+        saveState();
+        navigate("login", { loginNotice: "Account verified. Please sign in." });
+      });
+    }
+    return;
+  }
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -2539,275 +3008,184 @@ function bindClientOnboarding() {
       showFormError(form, "Please choose at least one service.");
       return;
     }
-
-    const draft = syncDraftClient(formData);
-    const preferredName = sanitizeOnboardingText(formData.get("name"));
-    if (!isValidPersonName(preferredName)) {
-      addFieldError(form, "name");
-      showFormError(form, "Please enter a valid name. Names can only contain letters, spaces, and hyphens (-).");
-      return;
-    }
-
-    const postalCode = sanitizeOnboardingText(formData.get("postalCode"));
-    let locality = sanitizeOnboardingText(formData.get("location"));
-    if (postalCode && !locality) {
-      locality = await lookupLocalityFromPostalCode(postalCode);
-    }
-    if (!locality) {
-      showFormError(form, "Please enter a valid locality.");
-      return;
-    }
-
-    const languagesSelected = formData.getAll("language").map((value) => String(value || "").trim()).filter(Boolean);
+    const languagesSelected = formData.getAll("languages");
     if (!languagesSelected.length) {
       showFormError(form, "Please choose at least one language.");
       return;
     }
-
-    draft.name = preferredName;
+    const draft = setEmailFromForm(formData);
+    const postalCode = sanitizeOnboardingText(formData.get("postalCode"));
+    let locality = sanitizeOnboardingText(formData.get("locality"));
+    if (!locality && postalCode) {
+      locality = await lookupLocalityFromPostalCode(postalCode);
+    }
+    if (!locality) {
+      showFormError(form, "Please enter a valid postal code so we can detect your locality.");
+      return;
+    }
+    const preferredName = sanitizeOnboardingText(formData.get("name"));
+    const surname = sanitizeOnboardingText(formData.get("surname"));
+    if (!isValidPersonName(preferredName) || !isValidPersonName(surname)) {
+      showFormError(form, "Please enter a valid name. Names can only contain letters, spaces, and hyphens (-).");
+      return;
+    }
+    draft.name = `${preferredName} ${surname}`.trim();
     draft.phone = sanitizeOnboardingText(formData.get("phone"));
     draft.location = locality;
-    draft.language = languagesSelected.join(", ");
-    draft.preferredCurrency = String(formData.get("preferredCurrency") || draft.preferredCurrency || "CHF");
-    draft.typicalServices = services;
+    draft.preferredCurrency = String(formData.get("preferredCurrency") || "CHF");
+    draft.languages = normalizeLanguages(formData.getAll("languages"));
+    draft.language = languageDisplay(draft.languages);
+    draft.typicalServices = formData.getAll("services");
     setOnboardingComplete(draft, {
       preferredName,
+      surname,
       postalCode,
       locality,
       about: sanitizeOnboardingText(formData.get("about")),
-      languages: languagesSelected,
-      interests: services,
+      languages: draft.languages,
+      interests: draft.typicalServices,
       preferredCurrency: draft.preferredCurrency
     });
-    await saveState();
-    writeSession({ role: "client", id: draft.id });
-    navigate("client-dashboard");
+    saveState();
+    const session = readSession();
+    if (session?.role === "client" && session.id === draft.id) {
+      navigate("client-dashboard");
+    } else if (routeMeta.mode === "edit") {
+      navigate("client-dashboard");
+    } else {
+      writeSession({ role: "client", id: draft.id });
+      navigate("client-dashboard");
+    }
   });
 }
 
 function bindWorkerOnboarding() {
   const form = document.querySelector("#workerOnboardingForm");
   if (!form) return;
-  const stage = routeMeta.stage || "register";
+  const stage = routeMeta.stage || (form.dataset.form === "worker-register" ? "register" : form.dataset.form === "worker-details" ? "details" : "verify");
   const photoInput = document.querySelector("#photoInput");
   const preview = document.querySelector(".photo-uploader img");
   const worker = getWorker();
-  const hasEmailField = Boolean(form.querySelector('input[name="email"]'));
+  const serviceOtherCheckbox = document.querySelector("input[name='services'][value='__other__']");
+  const customServiceCard = document.querySelector(".more-service-card");
+  const customServiceInput = document.querySelector("textarea[name='customService']");
 
   const syncDraftWorker = (formData) => {
-    if (stage !== "details") return worker;
-    const preferredName = sanitizeOnboardingText(formData.get("name"));
-    const selectedAgeRange = String(formData.get("ageRange") || "").trim() || ageRangeForWorker(worker.age);
-    const selectedLanguages = formData
-      .getAll("language")
-      .map((value) => String(value || "").trim())
-      .filter(Boolean);
-    const services = formData
-      .getAll("services")
-      .concat(
-        String(formData.get("customService") || "")
-          .split(/[,\n]/)
-          .map((item) => item.trim())
-          .filter(Boolean)
-      )
-      .filter((item, index, list) => list.indexOf(item) === index);
-    const certifications = String(formData.get("certifications") || "")
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-    worker.name = preferredName;
-    worker.ageRange = selectedAgeRange;
-    worker.age = ageRangeToNumericAge(selectedAgeRange);
-    worker.phone = sanitizeOnboardingText(formData.get("phone"));
-    worker.school = sanitizeOnboardingText(formData.get("school"));
-    worker.language = selectedLanguages.join(", ");
-    worker.bio = sanitizeOnboardingText(formData.get("bio"));
-    worker.services = services;
-    worker.certifications = certifications;
-    const nextParentEmail = sanitizeOnboardingText(formData.get("parentEmail"));
-    if (worker.parentEmail !== nextParentEmail) {
-      worker.parentVerificationCode = "";
-      worker.parentVerificationSentAt = "";
-      worker.parentVerifiedAt = "";
-      worker.parentConfirmed = false;
+    const nextEmail = normalizeEmail(formData.get("email"));
+    if (nextEmail && worker.email !== nextEmail) {
+      worker.emailVerificationCode = "";
+      worker.emailVerificationSentAt = "";
+      worker.emailVerifiedAt = "";
     }
-    worker.parentEmail = nextParentEmail;
-    worker.uiPreferences = {
-      ...(worker.uiPreferences || {}),
-      onboarding: {
-        ...(worker.uiPreferences?.onboarding || {}),
-        preferredName,
-        ageRange: selectedAgeRange,
-        postalCode: sanitizeOnboardingText(formData.get("postalCode")),
-        locality: sanitizeOnboardingText(formData.get("location")),
-        languages: selectedLanguages,
-        interests: services,
-        about: sanitizeOnboardingText(formData.get("bio")),
-        parentEmail: nextParentEmail
-      }
-    };
-    worker.location = sanitizeOnboardingText(formData.get("location"));
+    if (nextEmail) worker.email = nextEmail;
     return worker;
-  };
-
-  const submitRegistration = async (formData) => {
-    const email = normalizeEmail(formData.get("email"));
-    const password = String(formData.get("password") || "");
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      addFieldError(form, "email");
-      showFormError(form, "Please enter a valid email address.");
-      return;
-    }
-
-    if (password.length < 8) {
-      addFieldError(form, "password");
-      showFormError(form, "Please make your password at least 8 characters long.");
-      return;
-    }
-
-    const existing = findUserByEmail(email);
-    if (existing && existing.role !== "worker") {
-      addFieldError(form, "email");
-      showFormError(form, "That email is already linked to another account.");
-      return;
-    }
-    if (existing && existing.emailVerifiedAt && existing.role === "worker") {
-      addFieldError(form, "email");
-      showFormError(form, "That email is already in use.");
-      return;
-    }
-    const draft = existing && existing.role === "worker" ? existing : createSignupRecord("worker", email, password);
-    draft.email = email;
-    Object.assign(draft, passwordRecord(password));
-    draft.emailVerificationCode = generateVerificationCode();
-    draft.emailVerificationSentAt = new Date().toISOString();
-    draft.emailVerifiedAt = "";
-    state.selectedWorkerId = draft.id;
-    await saveState();
-
-    try {
-      await sendVerificationEmail({ to: draft.email, code: draft.emailVerificationCode, role: "worker" });
-    } catch (error) {
-      showFormError(form, error.message || "We could not send the verification email.");
-      return;
-    }
-    navigate("onboard-worker", { role: "worker", stage: "verify" });
-  };
-
-  const sendWorkerEmailCode = async () => {
-    const draft = worker;
-    if (!draft.email) {
-      showFormError(form, "Please add the student email first.");
-      return;
-    }
-    draft.emailVerificationCode = generateVerificationCode();
-    draft.emailVerificationSentAt = new Date().toISOString();
-    draft.emailVerifiedAt = "";
-    await saveState();
-    try {
-      await sendVerificationEmail({ to: draft.email, code: draft.emailVerificationCode, role: "worker" });
-    } catch (error) {
-      showFormError(form, error.message || "We could not send the verification email.");
-      return;
-    }
-    render();
-  };
-
-  const verifyWorkerEmailCode = async () => {
-    const code = String(new FormData(form).get("emailVerificationCode") || "").trim();
-    if (!worker.emailVerificationCode) {
-      showFormError(form, "Send the student email code first.");
-      return;
-    }
-    if (isEmailVerificationExpired(worker.emailVerificationSentAt)) {
-      showFormError(form, "That verification code has expired. Please send a new one.");
-      return;
-    }
-    if (code !== worker.emailVerificationCode) {
-      showFormError(form, "That student email code does not match.");
-      return;
-    }
-    worker.emailVerifiedAt = new Date().toISOString();
-    worker.emailVerificationCode = "";
-    await saveState();
-    helperNotice = "";
-    navigate("login", { loginNotice: "Account verified. Please sign in." });
-  };
-
-  const sendParentCode = async () => {
-    const draft = syncDraftWorker(new FormData(form));
-    if (!draft.emailVerifiedAt) {
-      showFormError(form, "Verify the student email first.");
-      return;
-    }
-    if (!draft.parentEmail) {
-      showFormError(form, "Please add the parent email first.");
-      return;
-    }
-    draft.parentConfirmed = false;
-    draft.parentVerificationCode = generateVerificationCode();
-    draft.parentVerificationSentAt = new Date().toISOString();
-    draft.parentVerifiedAt = "";
-    await saveState();
-    try {
-      await sendVerificationEmail({
-        to: draft.parentEmail,
-        code: draft.parentVerificationCode,
-        role: "parent",
-        subject: "Verify your ParTime parent account",
-        label: "parent"
-      });
-    } catch (error) {
-      showFormError(form, error.message || "We could not send the parent verification email.");
-      return;
-    }
-    render();
-  };
-
-  const verifyParentCode = async () => {
-    const formData = new FormData(form);
-    const draft = syncDraftWorker(formData);
-    if (!draft.emailVerifiedAt) {
-      showFormError(form, "Verify the student email first.");
-      return;
-    }
-    const code = String(formData.get("parentVerificationCode") || "").trim();
-    if (!draft.parentVerificationCode) {
-      showFormError(form, "Send the parent code first.");
-      return;
-    }
-    if (isEmailVerificationExpired(draft.parentVerificationSentAt)) {
-      showFormError(form, "That parent verification code has expired. Please send a new one.");
-      return;
-    }
-    if (code !== draft.parentVerificationCode) {
-      showFormError(form, "That parent code does not match.");
-      return;
-    }
-    draft.parentConfirmed = true;
-    draft.parentVerifiedAt = new Date().toISOString();
-    createAutoParentAccount(draft);
-    await saveState();
-    render();
   };
 
   if (stage === "register") {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const formData = new FormData(form);
-      await submitRegistration(formData);
+      const email = normalizeEmail(formData.get("email"));
+      const password = String(formData.get("password") || "");
+      if (!email) {
+        showFormError(form, "Please add the student email first.");
+        return;
+      }
+      if (password.length < 8) {
+        showFormError(form, "Please make your password at least 8 characters long.");
+        return;
+      }
+      const existing = findUserByEmail(email);
+      if (existing && accountRoleForUser(existing) !== "worker") {
+        showFormError(form, "That email is already used for a different account.");
+        return;
+      }
+      if (existing && existing.emailVerifiedAt) {
+        showFormError(form, "That email already has a verified account. Please sign in.");
+        return;
+      }
+      const draft = existing || createSignupRecord("worker", email, password);
+      draft.email = email;
+      Object.assign(draft, passwordRecord(password));
+      draft.emailVerificationCode = generateVerificationCode();
+      draft.emailVerificationSentAt = new Date().toISOString();
+      draft.emailVerifiedAt = "";
+      saveState();
+      try {
+        await sendVerificationEmail({ to: email, code: draft.emailVerificationCode, role: "worker" });
+      } catch (error) {
+        showFormError(form, error.message || "We could not send the verification email.");
+        return;
+      }
+      navigate("onboard-worker", { stage: "verify", email });
     });
     return;
   }
 
-  const sendWorkerEmailButton = document.querySelector("[data-action='send-worker-email-code']");
-  if (sendWorkerEmailButton) sendWorkerEmailButton.addEventListener("click", sendWorkerEmailCode);
-  const verifyWorkerEmailButton = document.querySelector("[data-action='verify-worker-email-code']");
-  if (verifyWorkerEmailButton) verifyWorkerEmailButton.addEventListener("click", verifyWorkerEmailCode);
-  const sendParentCodeButton = document.querySelector("[data-action='send-parent-code']");
-  if (sendParentCodeButton) sendParentCodeButton.addEventListener("click", sendParentCode);
-  const verifyParentCodeButton = document.querySelector("[data-action='verify-parent-code']");
-  if (verifyParentCodeButton) verifyParentCodeButton.addEventListener("click", verifyParentCode);
+  if (stage === "verify") {
+    const sendWorkerEmailButton = document.querySelector("[data-action='send-worker-email-code']");
+    if (sendWorkerEmailButton) {
+      sendWorkerEmailButton.addEventListener("click", async () => {
+        const draft = syncDraftWorker(new FormData(form));
+        if (!draft.email) {
+          showFormError(form, "Please add the student email first.");
+          return;
+        }
+        draft.emailVerificationCode = generateVerificationCode();
+        draft.emailVerificationSentAt = new Date().toISOString();
+        draft.emailVerifiedAt = "";
+        saveState();
+        try {
+          await sendVerificationEmail({ to: draft.email, code: draft.emailVerificationCode, role: "worker" });
+        } catch (error) {
+          showFormError(form, error.message || "We could not send the verification email.");
+          return;
+        }
+        render();
+      });
+    }
+
+    const verifyWorkerEmailButton = document.querySelector("[data-action='verify-worker-email-code']");
+    if (verifyWorkerEmailButton) {
+      verifyWorkerEmailButton.addEventListener("click", () => {
+        const formData = new FormData(form);
+        const draft = syncDraftWorker(formData);
+        const code = String(formData.get("emailVerificationCode") || "").trim();
+        if (!draft.emailVerificationCode) {
+          showFormError(form, "Send the student email code first.");
+          return;
+        }
+        if (isEmailVerificationExpired(draft.emailVerificationSentAt)) {
+          showFormError(form, "That verification code has expired. Please send a new one.");
+          return;
+        }
+        if (code !== draft.emailVerificationCode) {
+          showFormError(form, "That student email code does not match.");
+          return;
+        }
+        draft.emailVerifiedAt = new Date().toISOString();
+        draft.emailVerificationCode = "";
+        saveState();
+        navigate("login", { loginNotice: "Account verified. Please sign in." });
+      });
+    }
+    return;
+  }
+
+  const toggleCustomServiceCard = () => {
+    if (!customServiceCard) return;
+    const hasOther = Boolean(serviceOtherCheckbox?.checked);
+    const hasCustomValue = Boolean(String(customServiceInput?.value || "").trim());
+    customServiceCard.hidden = !(hasOther || hasCustomValue);
+  };
+
+  document.querySelectorAll("input[name='services']").forEach((checkbox) => {
+    checkbox.addEventListener("change", toggleCustomServiceCard);
+  });
+  if (customServiceInput) {
+    customServiceInput.addEventListener("input", toggleCustomServiceCard);
+  }
+  toggleCustomServiceCard();
 
   if (photoInput && preview) {
     photoInput.addEventListener("change", () => {
@@ -2821,99 +3199,100 @@ function bindWorkerOnboarding() {
     });
   }
 
-  if (stage !== "details") return;
-
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const formData = new FormData(form);
-    const ageRange = String(formData.get("ageRange") || "").trim();
-    const age = ageRangeToNumericAge(ageRange);
-    if (age > 18) {
-      showFormError(form, "Student work accounts are for students 18 and under. Please enter an age from 13 to 18.");
+    const languagesSelected = formData.getAll("languages");
+    if (!languagesSelected.length) {
+      showFormError(form, "Please choose at least one language.");
+      return;
+    }
+    const selectedServices = formData.getAll("services");
+    const customService = String(formData.get("customService") || "").trim();
+    if (selectedServices.includes("__other__") && !customService) {
+      showFormError(form, "Please write the service you mean by Other.");
       return;
     }
 
     const draft = syncDraftWorker(formData);
-    const preferredName = sanitizeOnboardingText(formData.get("name"));
-    if (!isValidPersonName(preferredName)) {
-      addFieldError(form, "name");
-      showFormError(form, "Please enter a valid name. Names can only contain letters, spaces, and hyphens (-).");
+    const ageRange = String(formData.get("ageRange") || "");
+    if (!ageRange) {
+      showFormError(form, "Please choose your age range.");
       return;
     }
-
-    if (!draft.services.length) {
+    const ageMap = {
+      "Under 18": 17,
+      "18-24": 18,
+      "25-34": 25,
+      "35-44": 35,
+      "45-54": 45,
+      "55-64": 55,
+      "65+": 65
+    };
+    const postalCode = sanitizeOnboardingText(formData.get("postalCode"));
+    let locality = sanitizeOnboardingText(formData.get("locality"));
+    if (!locality && postalCode) {
+      locality = await lookupLocalityFromPostalCode(postalCode);
+    }
+    if (!locality) {
+      showFormError(form, "Please enter a valid postal code so we can detect your locality.");
+      return;
+    }
+    if (!draft.emailVerifiedAt) {
+      showFormError(form, "Please finish email verification before saving the account.");
+      return;
+    }
+    if (!draft.services.length && !selectedServices.length) {
       showFormError(form, "Please choose at least one service or write one in More.");
       return;
     }
 
-    if (!draft.emailVerifiedAt || !draft.parentConfirmed) {
-      showFormError(form, "Please finish email verification before saving the account.");
-      return;
-    }
-
     const file = photoInput?.files?.[0];
-    const commitWorker = async (photo) => {
-      if (photo) draft.photo = photo;
-      draft.ageRange = ageRange;
-      draft.age = age;
-      draft.name = preferredName;
-      const postalCode = sanitizeOnboardingText(formData.get("postalCode"));
-      let locality = sanitizeOnboardingText(formData.get("location"));
-      if (postalCode && !locality) {
-        locality = await lookupLocalityFromPostalCode(postalCode);
-      }
-      if (!locality) {
-        showFormError(form, "Please enter a valid locality.");
-        return;
-      }
-      const selectedLanguages = formData.getAll("language").map((value) => String(value || "").trim()).filter(Boolean);
-      if (!selectedLanguages.length) {
-        showFormError(form, "Please choose at least one language.");
-        return;
-      }
+    const commitWorker = (photo) => {
+      draft.name = sanitizeOnboardingText(formData.get("name"));
+      draft.phone = sanitizeOnboardingText(formData.get("phone"));
+      draft.age = ageMap[ageRange] || 17;
       draft.location = locality;
       draft.school = sanitizeOnboardingText(formData.get("school"));
-      draft.language = selectedLanguages.join(", ");
+      draft.language = languageDisplay(normalizeLanguages(formData.getAll("languages")));
+      draft.languages = normalizeLanguages(formData.getAll("languages"));
       draft.bio = sanitizeOnboardingText(formData.get("bio"));
-      draft.parentEmail = sanitizeOnboardingText(formData.get("parentEmail"));
-      draft.uiPreferences = {
-        ...(draft.uiPreferences || {}),
-        onboarding: {
-          ...(draft.uiPreferences?.onboarding || {}),
-          preferredName,
-          ageRange,
-          postalCode,
-          locality,
-          languages: selectedLanguages,
-          interests: draft.services,
-          about: draft.bio
-        }
-      };
-      if (!draft.parentConfirmed) {
-        showFormError(form, "Please finish parent verification before saving the account.");
-        return;
-      }
+      draft.services = formData
+        .getAll("services")
+        .filter((service) => service !== "__other__")
+        .concat(
+          formData
+            .get("customService")
+            .split(/[,\n]/)
+            .map((item) => item.trim())
+            .filter(Boolean)
+        )
+        .filter((item, index, list) => list.indexOf(item) === index);
+      draft.certifications = formData
+        .get("certifications")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      if (photo) draft.photo = photo;
       setOnboardingComplete(draft, {
-        preferredName,
+        preferredName: draft.name,
         ageRange,
         postalCode,
         locality,
-        languages: selectedLanguages,
+        languages: draft.languages,
         interests: draft.services,
         about: draft.bio
       });
-      draft.parentVerificationCode = "";
-      draft.parentVerificationSentAt = draft.parentVerificationSentAt || new Date().toISOString();
-      draft.parentVerifiedAt = draft.parentVerifiedAt || new Date().toISOString();
-      createAutoParentAccount(draft);
-      addParentEvent(draft.id, "Registration confirmed", `${draft.name}'s student profile was confirmed for ParTime.`);
-      await saveState();
-      writeSession({ role: "worker", id: draft.id });
+      saveState();
+      const session = readSession();
+      if (session?.role !== "worker" || session.id !== draft.id) {
+        writeSession({ role: "worker", id: draft.id });
+      }
       navigate("worker-dashboard");
     };
 
     if (!file) {
-      await commitWorker();
+      commitWorker();
       return;
     }
 
@@ -2926,7 +3305,27 @@ function bindWorkerOnboarding() {
 function showFormError(form, message) {
   const existing = form.querySelector(".form-error");
   if (existing) existing.remove();
+  form.querySelectorAll(".field-error").forEach((field) => {
+    field.classList.remove("field-error");
+    field.removeAttribute("aria-invalid");
+  });
   form.insertAdjacentHTML("afterbegin", `<div class="form-error">${escapeHtml(message)}</div>`);
+  const normalized = String(message || "").toLowerCase();
+  if (normalized.includes("password")) {
+    const passwordFields = Array.from(form.querySelectorAll('input[name="password"], input[name="confirmPassword"]'));
+    passwordFields.forEach((field) => {
+      field.classList.add("field-error");
+      field.setAttribute("aria-invalid", "true");
+    });
+    const focusTarget =
+      normalized.includes("do not match")
+        ? form.querySelector('input[name="confirmPassword"]') || form.querySelector('input[name="password"]')
+        : form.querySelector('input[name="password"]');
+    focusTarget?.focus();
+    return;
+  }
+  const focusTarget = form.querySelector('input[name="email"], input[name="name"], input[name="surname"]') || form.querySelector("input, textarea, select");
+  focusTarget?.focus();
 }
 
 function bindClientDashboard() {
@@ -2960,15 +3359,20 @@ function bindClientDashboard() {
     button.addEventListener("click", () => {
       const job = state.jobs.find((item) => item.id === button.dataset.jobId);
       const worker = getWorker(button.dataset.workerId);
+      const session = readSession();
       job.status = "In Progress";
       job.acceptedWorkerId = worker.id;
+      const conversation = ensureConversationForJob(job);
       job.applications = job.applications.map((application) => ({
         ...application,
         status: application.workerId === worker.id ? "Accepted" : "Not selected",
         acceptedAt: application.workerId === worker.id ? new Date().toISOString() : application.acceptedAt
       }));
-      addParentEvent(worker.id, "Job accepted", `${worker.name} was accepted for ${job.title}.`);
       saveState();
+      if (session && session.role === "client" && conversation) {
+        navigate("messages", { conversationId: conversation.id, returnTo: "/client" });
+        return;
+      }
       render();
     });
   });
@@ -2979,7 +3383,6 @@ function bindClientDashboard() {
       const worker = getWorker(job.acceptedWorkerId);
       job.status = "Completed";
       job.completedAt = new Date().toISOString();
-      addParentEvent(worker.id, "Completion approved", `${worker.name} completed ${job.title} and earned ${formatMoney(jobTotal(job), job.currency)}.`);
       saveState();
       render();
     });
@@ -3064,37 +3467,217 @@ function bindWorkerDashboard() {
         status: "Applied",
         appliedAt: new Date().toISOString()
       });
-      addParentEvent(worker.id, "Application sent", `${worker.name} applied for ${job.title}.`);
       saveState();
       render();
     });
   });
 }
 
+function bindMessagesView() {
+  const session = readSession();
+  if (!session) return;
+
+  const form = document.querySelector("#messageForm");
+  const conversationId = form?.dataset.conversationId || routeMeta.conversationId || "";
+  if (conversationId && markConversationRead(conversationId)) {
+    render();
+    return;
+  }
+  if (!form) return;
+
+  const textarea = form.querySelector("textarea[name='message']");
+  if (!textarea) return;
+
+  textarea.addEventListener("input", () => {
+    messageDrafts[conversationId] = textarea.value;
+  });
+
+  textarea.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (messageSendBusy) return;
+    const content = textarea.value.trim();
+    if (!content) {
+      messageSendError = "Write a message first.";
+      render();
+      return;
+    }
+
+    const conversation = getConversationById(conversationId);
+    if (!conversation) {
+      messageSendError = "That conversation is not available.";
+      render();
+      return;
+    }
+
+    const allowed =
+      (session.role === "client" && conversation.clientId === session.id) ||
+      (session.role === "worker" && conversation.workerId === session.id);
+    if (!allowed) {
+      messageSendError = "You can only message in your own accepted job threads.";
+      render();
+      return;
+    }
+
+    messageSendBusy = true;
+    messageSendError = "";
+    render();
+
+    const now = new Date().toISOString();
+    state.messages.push({
+      id: `msg_${Date.now()}_${hashString(content).slice(0, 8)}`,
+      conversationId,
+      senderId: session.id,
+      senderRole: session.role,
+      content,
+      createdAt: now
+    });
+    conversation.updatedAt = now;
+    if (session.role === "client") conversation.clientLastReadAt = now;
+    if (session.role === "worker") conversation.workerLastReadAt = now;
+    messageDrafts[conversationId] = "";
+
+    try {
+      await saveState();
+      messageSendBusy = false;
+      render();
+    } catch {
+      messageSendBusy = false;
+      messageSendError = "We could not send that message right now.";
+      render();
+    }
+  });
+}
+
 async function bootstrap() {
   state = (await loadState()) || createDefaultState();
+  applyRouteFromLocation(true);
   const session = readSession();
-  if (session) {
+  if (view === "messages" && !session) {
+    // keep the deep-link page visible without exposing chat data
+  } else if (session) {
     const role = session.role || "client";
     const target = session.id;
     if (role === "client" && state.clients[target]) {
       state.selectedClientId = target;
-      view = "client-dashboard";
+      if (view === "landing" || view === "login" || view === "create-account" || view === "settings") {
+        view = "client-dashboard";
+      }
     } else if (role === "worker" && state.workers[target]) {
       state.selectedWorkerId = target;
-      view = "worker-dashboard";
-    } else if (role === "parent" && state.parents[target]) {
-      state.selectedParentId = target;
-      view = "parent-monitor";
+      if (view === "landing" || view === "login" || view === "create-account" || view === "settings") {
+        view = "worker-dashboard";
+      }
     } else {
       clearSession();
-      view = "login";
+      if (view !== "messages") view = "login";
     }
   } else {
-    view = "landing";
+    if (view !== "messages") {
+      view = "landing";
+    }
   }
+
+  window.addEventListener("popstate", () => {
+    applyRouteFromLocation(false);
+    render();
+  });
 
   render();
 }
 
 bootstrap();
+function enhanceSignupFields() {
+  const signupForms = document.querySelectorAll('[data-form="client-details"], [data-form="worker-details"]');
+  signupForms.forEach((form) => {
+    if (form.dataset.signupEnhanced === "true") return;
+    form.dataset.signupEnhanced = "true";
+
+    const nameField = form.querySelector('input[name="name"]');
+    const nameValue = String(nameField?.value || "").trim();
+    const isEditing = routeMeta?.mode === "edit";
+    if (nameField && !isEditing) {
+      if (!nameValue || nameValue === "Jordan Taylor") {
+        nameField.value = "";
+      }
+      nameField.placeholder = "Jordan Taylor";
+      nameField.autocomplete = "name";
+    }
+
+    const passwordFields = form.querySelectorAll('input[type="password"]');
+    passwordFields.forEach((field) => {
+      if (field.parentElement?.classList.contains("password-field")) return;
+      const wrapper = document.createElement("div");
+      wrapper.className = "password-field";
+      field.parentNode.insertBefore(wrapper, field);
+      wrapper.appendChild(field);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "password-toggle";
+      button.setAttribute("aria-label", "Show password");
+      button.setAttribute("aria-pressed", "false");
+      button.innerHTML = `${icon("eye")}`;
+      wrapper.appendChild(button);
+    });
+  });
+}
+
+function bindSignupEnhancements() {
+  enhanceSignupFields();
+
+  document.addEventListener(
+    "submit",
+    (event) => {
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement)) return;
+      if (!form.matches('[data-form="client-details"], [data-form="worker-details"]')) return;
+      const nameField = form.querySelector('input[name="name"]');
+      const name = String(nameField?.value || "").trim();
+      if (!nameField || !isValidPersonName(name)) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (nameField) {
+          nameField.classList.add("field-error");
+          nameField.setAttribute("aria-invalid", "true");
+        }
+        showFormError(form, "Please enter a valid name. Names can only contain letters, spaces, and hyphens (-).");
+      }
+    },
+    true,
+  );
+
+  document.addEventListener("input", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.name !== "name") return;
+    if (target.closest('[data-form="client-details"], [data-form="worker-details"]')) {
+      target.classList.remove("field-error");
+      target.removeAttribute("aria-invalid");
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest?.("[data-password-toggle]");
+    if (!button) return;
+    const fieldId = button.getAttribute("data-password-toggle");
+    const input = fieldId ? document.getElementById(fieldId) : null;
+    if (!(input instanceof HTMLInputElement)) return;
+    const visible = input.type === "text";
+    input.type = visible ? "password" : "text";
+    button.setAttribute("aria-pressed", String(!visible));
+    button.setAttribute("aria-label", visible ? "Show password" : "Hide password");
+    button.innerHTML = visible ? `${icon("eye")}` : `${icon("eye-off")}`;
+  });
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bindSignupEnhancements, { once: true });
+} else {
+  bindSignupEnhancements();
+}

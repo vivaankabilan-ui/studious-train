@@ -117,7 +117,7 @@ export async function onRequest(context) {
         status: "not_configured",
         error: "Set RESEND_API_KEY and AUTH_EMAIL_FROM (or PARENT_EMAIL_FROM) to send real verification emails."
       },
-      { status: 202 }
+      { status: 503 }
     );
   }
 
