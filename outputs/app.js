@@ -265,6 +265,31 @@ async function sendVerificationEmail({ to, code, role }) {
   return payload;
 }
 
+async function sendPasswordResetEmail({ to, code, role }) {
+  const response = await fetch(AUTH_EMAIL_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      to,
+      code,
+      purpose: "password-reset",
+      subject: "Reset your ParTime password",
+      label: role === "worker" ? "student" : "client"
+    })
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok && payload.status !== "not_configured") {
+    throw new Error(payload.error || "We could not send the reset email.");
+  }
+  if (payload.status === "not_configured") {
+    throw new Error(payload.error || "Email sending is not configured yet.");
+  }
+  return payload;
+}
+
 function createSignupRecord(role, email, password) {
   const normalizedEmail = normalizeEmail(email);
   const idPrefix = role === "worker" ? "w" : "c";
@@ -2856,8 +2881,8 @@ function bindForgotPassword() {
   if (!form) return;
   let resetTarget = null;
 
-  document.querySelector("[data-action='send-reset-code']").addEventListener("click", () => {
-    const email = String(new FormData(form).get("email") || "").trim();
+  document.querySelector("[data-action='send-reset-code']").addEventListener("click", async () => {
+    const email = normalizeEmail(new FormData(form).get("email"));
     if (!email) {
       showFormError(form, "Please add your email first.");
       return;
@@ -2874,8 +2899,17 @@ function bindForgotPassword() {
     resetTarget = user;
     user.passwordResetCode = generateVerificationCode();
     user.passwordResetSentAt = new Date().toISOString();
-    routeMeta = { ...routeMeta, email, resetNotice: "Reset link ready. Check your email and use the code on this page." };
-    saveState();
+    await saveState();
+    try {
+      await sendPasswordResetEmail({ to: email, code: user.passwordResetCode, role: accountRoleForUser(user) });
+    } catch (error) {
+      user.passwordResetCode = "";
+      user.passwordResetSentAt = "";
+      await saveState();
+      showFormError(form, error.message || "We could not send the reset email.");
+      return;
+    }
+    routeMeta = { ...routeMeta, email, resetNotice: "Reset code sent. Check your email and use the code on this page." };
     render();
   });
 
@@ -2897,6 +2931,10 @@ function bindForgotPassword() {
     }
     if (!user.passwordResetCode) {
       showFormError(form, "Send the reset code first.");
+      return;
+    }
+    if (isEmailVerificationExpired(user.passwordResetSentAt)) {
+      showFormError(form, "That reset code has expired. Please send a new one.");
       return;
     }
     if (resetCode !== user.passwordResetCode) {
