@@ -181,6 +181,52 @@ function sanitizeOnboardingText(value) {
   return String(value || "").trim();
 }
 
+function countryOptions(selected = "") {
+  const countries = [
+    "Switzerland",
+    "France",
+    "United Kingdom",
+    "United States",
+    "Germany",
+    "Italy",
+    "Spain",
+    "Other"
+  ];
+  const current = selected || "Switzerland";
+  return countries
+    .map((country) => `<option value="${escapeHtml(country)}" ${country === current ? "selected" : ""}>${escapeHtml(country)}</option>`)
+    .join("");
+}
+
+function countryCodeForLookup(country) {
+  const normalized = String(country || "").trim().toLowerCase();
+  const codes = {
+    switzerland: "ch",
+    france: "fr",
+    "united kingdom": "gb",
+    "united states": "us",
+    germany: "de",
+    italy: "it",
+    spain: "es"
+  };
+  return codes[normalized] || "";
+}
+
+async function lookupLocalityFromPostalCode(postalCode, country = "Switzerland") {
+  const code = sanitizeOnboardingText(postalCode);
+  const countryCode = countryCodeForLookup(country);
+  if (!code || !countryCode) return "";
+  try {
+    const response = await fetch(`https://api.zippopotam.us/${countryCode}/${encodeURIComponent(code)}`);
+    if (!response.ok) return "";
+    const payload = await response.json();
+    const place = Array.isArray(payload.places) ? payload.places[0] : null;
+    return sanitizeOnboardingText(place?.["place name"] || "");
+  } catch {
+    return "";
+  }
+}
+
 function isValidPersonName(value) {
   const normalized = String(value || "").trim();
   if (!normalized) return false;
@@ -208,6 +254,29 @@ function passwordFieldMarkup(name, label, autocomplete = "new-password") {
       </div>
     </label>
   `;
+}
+
+function attachPostalLocalityLookup(form) {
+  const postalInput = form.querySelector('input[name="postalCode"]');
+  const countryInput = form.querySelector('[name="country"]');
+  const localityInput = form.querySelector('input[name="locality"]');
+  if (!postalInput || !countryInput || !localityInput) return;
+
+  let lookupTicket = 0;
+  const runLookup = async () => {
+    const postalCode = sanitizeOnboardingText(postalInput.value);
+    const country = sanitizeOnboardingText(countryInput.value) || "Switzerland";
+    if (!postalCode) return;
+    const ticket = ++lookupTicket;
+    const locality = await lookupLocalityFromPostalCode(postalCode, country);
+    if (ticket !== lookupTicket || !locality) return;
+    localityInput.value = locality;
+    localityInput.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+
+  postalInput.addEventListener("blur", runLookup);
+  postalInput.addEventListener("change", runLookup);
+  countryInput.addEventListener("change", runLookup);
 }
 
 function userPostalCode(user) {
@@ -1659,7 +1728,7 @@ function renderCreateAccount() {
       <div class="auth-panel">
         <p class="eyebrow">New account</p>
         <h1>Create account</h1>
-        <p class="muted">Choose the type of account you want to create. We’ll start with email and password, then verify the account and finish the first-time profile setup after sign in.</p>
+        <p class="muted">Choose the type of account you want to create. We’ll start with email and password, then verify the account and take you straight to profile setup.</p>
         <div class="account-choices account-choices--stackable">
           <button class="account-card account-card--client" data-view="onboard-client" data-stage="register" type="button">
             <span class="account-card-label">Client account</span>
@@ -1715,7 +1784,7 @@ function renderClientRegistrationScreen() {
 }
 
 function renderClientVerificationScreen() {
-  const client = getClient();
+  const client = getClient(routeMeta.userId) || getClient() || findUserByEmail(routeMeta.email || "");
   return `
     <section class="form-page">
       <div class="section-heading section-heading--with-actions">
@@ -1742,7 +1811,7 @@ function renderClientVerificationScreen() {
             />
           </label>
           <div class="verification-status ${client.emailVerifiedAt ? "is-confirmed" : ""}">
-            ${client.emailVerifiedAt ? "Email verified. Please sign in to continue." : "Enter the code you received by email."}
+            ${client.emailVerifiedAt ? "Email verified. Continue to your profile details." : "Enter the code you received by email."}
           </div>
           <div class="form-actions onboarding-actions verification-actions">
             <button class="secondary small" type="button" data-action="send-client-email-code">Resend code</button>
@@ -1766,7 +1835,7 @@ function ageRangeForWorker(age) {
 }
 
 function renderClientDetailsForm() {
-  const client = getClient();
+  const client = getClient(routeMeta.userId) || getClient() || findUserByEmail(routeMeta.email || "");
   const isProfileEdit = routeMeta.mode === "edit";
   const onboarding = onboardingInfo(client);
   return `
@@ -1802,6 +1871,10 @@ function renderClientDetailsForm() {
           <label>
             <span>Phone number</span>
             <input type="tel" name="phone" value="${escapeHtml(client.phone || "")}" placeholder="Optional" />
+          </label>
+          <label>
+            <span>Country of residence</span>
+            <select name="country" required>${countryOptions(onboarding.country || client.country)}</select>
           </label>
           <label>
             <span>Postal code</span>
@@ -1874,7 +1947,7 @@ function renderWorkerRegistrationScreen() {
 }
 
 function renderWorkerVerificationScreen() {
-  const worker = getWorker();
+  const worker = getWorker(routeMeta.userId) || getWorker() || findUserByEmail(routeMeta.email || "");
   return `
     <section class="form-page">
       <div class="section-heading section-heading--with-actions">
@@ -1901,7 +1974,7 @@ function renderWorkerVerificationScreen() {
             />
           </label>
           <div class="verification-status ${worker.emailVerifiedAt ? "is-confirmed" : ""}">
-            ${worker.emailVerifiedAt ? "Email verified. Please sign in to continue." : "Enter the code you received by email."}
+            ${worker.emailVerifiedAt ? "Email verified. Continue to your profile details." : "Enter the code you received by email."}
           </div>
           <div class="form-actions onboarding-actions verification-actions">
             <button class="secondary small" type="button" data-action="send-worker-email-code">Resend code</button>
@@ -1914,7 +1987,7 @@ function renderWorkerVerificationScreen() {
 }
 
 function renderWorkerDetailsForm() {
-  const worker = getWorker();
+  const worker = getWorker(routeMeta.userId) || getWorker() || findUserByEmail(routeMeta.email || "");
   const isProfileEdit = routeMeta.mode === "edit";
   const onboarding = onboardingInfo(worker);
   return `
@@ -1961,6 +2034,10 @@ function renderWorkerDetailsForm() {
             <label>
               <span>Phone number</span>
               <input type="tel" name="phone" value="${escapeHtml(worker.phone || "")}" placeholder="Optional" />
+            </label>
+            <label>
+              <span>Country of residence</span>
+              <select name="country" required>${countryOptions(onboarding.country || worker.country)}</select>
             </label>
             <label>
               <span>Postal code</span>
@@ -2091,43 +2168,6 @@ function renderClientDashboard() {
               <span>Negotiable</span>
             </label>
             <button class="primary full" type="submit">Post job</button>
-            <div class="post-visual-stack" aria-hidden="true">
-              <div class="post-visual-stack__top">
-                <span class="visual-badge visual-badge--green">Live preview</span>
-                <span class="post-visual-stack__meta">Looks like the public feed</span>
-              </div>
-              <div class="post-visual-stage">
-                <div class="post-visual-main">
-                  <div class="post-visual-main__head">
-                    <strong>Walk the dog after school</strong>
-                    <span>Today · 3 applicants</span>
-                  </div>
-                  <div class="post-visual-chips">
-                    <span>Fixed</span>
-                    <span>CHF 40</span>
-                    <span>Negotiable</span>
-                  </div>
-                  <div class="post-visual-profiles">
-                    ${["Maya", "Eli", "Nia"].map((name, index) => `<span style="--delay:${index * 90}ms">${escapeHtml(name)}</span>`).join("")}
-                  </div>
-                </div>
-                <div class="post-visual-side">
-                  <div class="post-visual-mini-card post-visual-mini-card--accent">
-                    <strong>Nearby matches</strong>
-                    <span>Students with pet care experience</span>
-                  </div>
-                  <div class="post-visual-mini-card">
-                    <strong>Request feed</strong>
-                    <span>New applications slide in instantly</span>
-                  </div>
-                </div>
-              </div>
-              <div class="post-visual-footer">
-                <span>Job posted</span>
-                <span>Client inbox</span>
-                <span>Student feed</span>
-              </div>
-            </div>
           </form>
         </section>
 
@@ -2868,6 +2908,14 @@ function bindLogin() {
 
     const role = accountRoleForUser(user);
     writeSession({ role, id: user.id });
+    if (role === "client") {
+      state.selectedClientId = user.id;
+      state.selectedWorkerId = "";
+    }
+    if (role === "worker") {
+      state.selectedWorkerId = user.id;
+      state.selectedClientId = "";
+    }
     if (requiresOnboarding(user)) {
       navigate(role === "worker" ? "onboard-worker" : "onboard-client", { stage: "details" });
       return;
@@ -2963,7 +3011,8 @@ function bindClientOnboarding() {
   const form = document.querySelector("#clientOnboardingForm");
   if (!form) return;
   const stage = routeMeta.stage || (form.dataset.form === "client-register" ? "register" : form.dataset.form === "client-details" ? "details" : "verify");
-  const client = getClient();
+  const client = getClient(routeMeta.userId) || getClient() || findUserByEmail(routeMeta.email || "");
+  if (stage === "details") attachPostalLocalityLookup(form);
 
   const setEmailFromForm = (formData) => {
     const nextEmail = normalizeEmail(formData.get("email"));
@@ -3000,6 +3049,8 @@ function bindClientOnboarding() {
         return;
       }
       const draft = existing || createSignupRecord("client", email, password);
+      state.selectedClientId = draft.id;
+      state.selectedWorkerId = "";
       draft.email = email;
       Object.assign(draft, passwordRecord(password));
       draft.emailVerificationCode = generateVerificationCode();
@@ -3012,7 +3063,7 @@ function bindClientOnboarding() {
         showFormError(form, error.message || "We could not send the verification email.");
         return;
       }
-      navigate("onboard-client", { stage: "verify", email });
+      navigate("onboard-client", { stage: "verify", email, userId: draft.id });
     });
     return;
   }
@@ -3061,7 +3112,10 @@ function bindClientOnboarding() {
         draft.emailVerifiedAt = new Date().toISOString();
         draft.emailVerificationCode = "";
         saveState();
-        navigate("login", { loginNotice: "Account verified. Please sign in." });
+        writeSession({ role: "client", id: draft.id });
+        state.selectedClientId = draft.id;
+        state.selectedWorkerId = "";
+        navigate("onboard-client", { stage: "details", email: draft.email, userId: draft.id });
       });
     }
     return;
@@ -3082,9 +3136,10 @@ function bindClientOnboarding() {
     }
     const draft = setEmailFromForm(formData);
     const postalCode = sanitizeOnboardingText(formData.get("postalCode"));
+    const country = sanitizeOnboardingText(formData.get("country")) || "Switzerland";
     let locality = sanitizeOnboardingText(formData.get("locality"));
     if (!locality && postalCode) {
-      locality = await lookupLocalityFromPostalCode(postalCode);
+      locality = await lookupLocalityFromPostalCode(postalCode, country);
     }
     if (!locality) {
       showFormError(form, "Please enter a valid postal code so we can detect your locality.");
@@ -3098,6 +3153,7 @@ function bindClientOnboarding() {
     }
     draft.name = `${preferredName} ${surname}`.trim();
     draft.phone = sanitizeOnboardingText(formData.get("phone"));
+    draft.country = country;
     draft.location = locality;
     draft.preferredCurrency = String(formData.get("preferredCurrency") || "CHF");
     draft.languages = normalizeLanguages(formData.getAll("languages"));
@@ -3106,6 +3162,7 @@ function bindClientOnboarding() {
     setOnboardingComplete(draft, {
       preferredName,
       surname,
+      country,
       postalCode,
       locality,
       about: sanitizeOnboardingText(formData.get("about")),
@@ -3132,7 +3189,8 @@ function bindWorkerOnboarding() {
   const stage = routeMeta.stage || (form.dataset.form === "worker-register" ? "register" : form.dataset.form === "worker-details" ? "details" : "verify");
   const photoInput = document.querySelector("#photoInput");
   const preview = document.querySelector(".photo-uploader img");
-  const worker = getWorker();
+  const worker = getWorker(routeMeta.userId) || getWorker() || findUserByEmail(routeMeta.email || "");
+  if (stage === "details") attachPostalLocalityLookup(form);
   const serviceOtherCheckbox = document.querySelector("input[name='services'][value='__other__']");
   const customServiceCard = document.querySelector(".more-service-card");
   const customServiceInput = document.querySelector("textarea[name='customService']");
@@ -3172,6 +3230,8 @@ function bindWorkerOnboarding() {
         return;
       }
       const draft = existing || createSignupRecord("worker", email, password);
+      state.selectedWorkerId = draft.id;
+      state.selectedClientId = "";
       draft.email = email;
       Object.assign(draft, passwordRecord(password));
       draft.emailVerificationCode = generateVerificationCode();
@@ -3184,7 +3244,7 @@ function bindWorkerOnboarding() {
         showFormError(form, error.message || "We could not send the verification email.");
         return;
       }
-      navigate("onboard-worker", { stage: "verify", email });
+      navigate("onboard-worker", { stage: "verify", email, userId: draft.id });
     });
     return;
   }
@@ -3233,7 +3293,10 @@ function bindWorkerOnboarding() {
         draft.emailVerifiedAt = new Date().toISOString();
         draft.emailVerificationCode = "";
         saveState();
-        navigate("login", { loginNotice: "Account verified. Please sign in." });
+        writeSession({ role: "worker", id: draft.id });
+        state.selectedWorkerId = draft.id;
+        state.selectedClientId = "";
+        navigate("onboard-worker", { stage: "details", email: draft.email, userId: draft.id });
       });
     }
     return;
@@ -3297,9 +3360,10 @@ function bindWorkerOnboarding() {
       "65+": 65
     };
     const postalCode = sanitizeOnboardingText(formData.get("postalCode"));
+    const country = sanitizeOnboardingText(formData.get("country")) || "Switzerland";
     let locality = sanitizeOnboardingText(formData.get("locality"));
     if (!locality && postalCode) {
-      locality = await lookupLocalityFromPostalCode(postalCode);
+      locality = await lookupLocalityFromPostalCode(postalCode, country);
     }
     if (!locality) {
       showFormError(form, "Please enter a valid postal code so we can detect your locality.");
@@ -3319,6 +3383,7 @@ function bindWorkerOnboarding() {
       draft.name = sanitizeOnboardingText(formData.get("name"));
       draft.phone = sanitizeOnboardingText(formData.get("phone"));
       draft.age = ageMap[ageRange] || 17;
+      draft.country = country;
       draft.location = locality;
       draft.school = sanitizeOnboardingText(formData.get("school"));
       draft.language = languageDisplay(normalizeLanguages(formData.getAll("languages")));
@@ -3344,6 +3409,7 @@ function bindWorkerOnboarding() {
       setOnboardingComplete(draft, {
         preferredName: draft.name,
         ageRange,
+        country,
         postalCode,
         locality,
         languages: draft.languages,
