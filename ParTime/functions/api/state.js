@@ -756,30 +756,26 @@ export async function onRequest(context) {
     return jsonResponse({ error: "D1 database binding missing." }, { status: 500 });
   }
 
-  await ensureMessagingTables(env.DB);
-  await ensureNotificationTables(env.DB);
+  try {
+    await ensureMessagingTables(env.DB);
+    await ensureNotificationTables(env.DB);
 
-  if (request.method === "GET") {
-    try {
+    if (request.method === "GET") {
       const state = await loadState(env.DB);
       return jsonResponse({ state });
-    } catch (error) {
-      return jsonResponse({ error: error?.message || "Unable to load state." }, { status: 500 });
     }
-  }
 
-  if (request.method === "POST") {
-    const state = await request.json();
-    try {
+    if (request.method === "POST") {
+      const state = await request.json();
       validateStateNames(state);
       await saveState(env.DB, state);
       return jsonResponse({ ok: true });
-    } catch (error) {
-      return jsonResponse({ error: error?.message || "Unable to save state." }, { status: 500 });
     }
-  }
 
-  return jsonResponse({ error: "Method not allowed." }, { status: 405 });
+    return jsonResponse({ error: "Method not allowed." }, { status: 405 });
+  } catch (error) {
+    return jsonResponse({ error: error?.message || "Unable to access state." }, { status: 500 });
+  }
 }
 
 function isValidPersonName(value) {
