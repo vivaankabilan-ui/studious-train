@@ -522,9 +522,25 @@ async function saveState(db, state) {
   }
 }
 
+function createEmptyState() {
+  return {
+    updatedAt: new Date().toISOString(),
+    selectedClientId: "",
+    selectedWorkerId: "",
+    selectedParentId: "",
+    clients: {},
+    workers: {},
+    parents: {},
+    jobs: [],
+    conversations: [],
+    messages: [],
+    parentEvents: []
+  };
+}
+
 async function loadState(db) {
   const users = await db.prepare(`SELECT * FROM users ORDER BY created_at ASC`).all();
-  if (!users.results.length) return null;
+  if (!users.results.length) return createEmptyState();
 
   const clients = {};
   const workers = {};
