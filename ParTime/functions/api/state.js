@@ -796,7 +796,34 @@ export async function onRequest(context) {
 function isValidPersonName(value) {
   const normalized = String(value || "").trim();
   if (!normalized) return false;
-  return /^[\p{L}]+(?:[ -][\p{L}]+)*$/u.test(normalized);
+  if (!/^[\p{L}]+(?:[ -][\p{L}]+)*$/u.test(normalized)) return false;
+  const blockedWords = [
+    "admin",
+    "administrator",
+    "moderator",
+    "support",
+    "fuck",
+    "fucking",
+    "shit",
+    "bitch",
+    "bastard",
+    "asshole",
+    "dick",
+    "pussy",
+    "cunt",
+    "whore",
+    "slut",
+    "porn",
+    "sex",
+    "nazi",
+    "hitler",
+    "terrorist",
+    "kill",
+    "murder",
+    "suicide"
+  ];
+  const compact = normalized.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  return !blockedWords.some((word) => compact.split(/[\s-]+/).includes(word));
 }
 
 function validateStateNames(state) {

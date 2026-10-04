@@ -39,6 +39,32 @@ const AGE_RANGE_OPTIONS = [
   { value: "65+", label: "65+" }
 ];
 
+const blockedNameWords = [
+  "admin",
+  "administrator",
+  "moderator",
+  "support",
+  "fuck",
+  "fucking",
+  "shit",
+  "bitch",
+  "bastard",
+  "asshole",
+  "dick",
+  "pussy",
+  "cunt",
+  "whore",
+  "slut",
+  "porn",
+  "sex",
+  "nazi",
+  "hitler",
+  "terrorist",
+  "kill",
+  "murder",
+  "suicide"
+];
+
 let view = "landing";
 let routeMeta = {};
 let helperFilter = "All";
@@ -165,10 +191,7 @@ function accountNeedsVerification(user) {
 function requiresOnboarding(user) {
   if (!user) return false;
   if (onboardingCompleted(user)) return false;
-  if (accountRoleForUser(user) === "worker") {
-    return !String(user.name || "").trim() || !String(user.location || "").trim() || !Number(user.age || 0) || !String(user.school || "").trim();
-  }
-  return !String(user.name || "").trim() || !String(user.location || "").trim();
+  return !String(user.name || "").trim();
 }
 
 function isEmailVerificationExpired(sentAt) {
@@ -230,7 +253,9 @@ async function lookupLocalityFromPostalCode(postalCode, country = "Switzerland")
 function isValidPersonName(value) {
   const normalized = String(value || "").trim();
   if (!normalized) return false;
-  return /^[\p{L}]+(?:[ -][\p{L}]+)*$/u.test(normalized);
+  if (!/^[\p{L}]+(?:[ -][\p{L}]+)*$/u.test(normalized)) return false;
+  const compact = normalized.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  return !blockedNameWords.some((word) => compact.split(/[\s-]+/).includes(word));
 }
 
 function icon(name) {
@@ -1476,29 +1501,9 @@ function renderSettings() {
 
 function renderHeroScene() {
   return `
-    <figure class="hero-visual hero-visual--scene" aria-hidden="true">
-      <div class="hero-scene">
-        <div class="hero-scene__stage">
-          <div class="hero-scene__mark" aria-hidden="true">
-            <span class="scene-pill scene-pill--mint">Live local feed</span>
-            <span class="hero-scene__arrow"></span>
-          </div>
-          <div class="hero-scene__board hero-scene__board--main">
-            <div class="scene-board__top">
-              <span class="scene-badge scene-badge--mint">Post a job</span>
-              <span class="scene-badge scene-badge--sky">Public feed</span>
-            </div>
-            <div class="hero-scene__listing">
-              <span class="scene-job-card__label">Pet Care</span>
-              <strong>Walk Luna after school</strong>
-              <small>CHF 45 · 3 applicants · Open today</small>
-            </div>
-            <div class="hero-scene__caption">
-              <strong>Clients post once.</strong>
-              <span>Students apply from a feed that stays clean and immediate.</span>
-            </div>
-          </div>
-        </div>
+    <figure class="hero-visual hero-visual--logo" aria-label="ParTime logo">
+      <div class="hero-logo-card">
+        <span class="hero-logo-mark">PT</span>
       </div>
     </figure>
   `;
@@ -1714,7 +1719,7 @@ function renderCreateAccount() {
           </button>
           <button class="account-card account-card--worker" data-view="onboard-worker" data-stage="register" type="button">
             <span class="account-card-label">Student account</span>
-            <strong>Create a worker profile</strong>
+            <strong>Create a student profile</strong>
             <small>Verify email, add your details, and start applying.</small>
           </button>
         </div>
