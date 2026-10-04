@@ -760,8 +760,12 @@ export async function onRequest(context) {
   await ensureNotificationTables(env.DB);
 
   if (request.method === "GET") {
-    const state = await loadState(env.DB);
-    return jsonResponse({ state });
+    try {
+      const state = await loadState(env.DB);
+      return jsonResponse({ state });
+    } catch (error) {
+      return jsonResponse({ error: error?.message || "Unable to load state." }, { status: 500 });
+    }
   }
 
   if (request.method === "POST") {
