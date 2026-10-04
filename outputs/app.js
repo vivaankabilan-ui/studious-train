@@ -1337,8 +1337,6 @@ function renderHeader() {
         ` : ""}
       </div>
       <div class="header-actions">
-        <button class="ghost small" type="button" data-action="open-client-profile">Client profile</button>
-        <button class="ghost small" type="button" data-action="open-worker-profile">Student profile</button>
         ${session ? `<button class="nav-link logout-link" data-action="logout">Log out</button>` : ""}
       </div>
     </header>
@@ -1629,27 +1627,6 @@ function renderLanding() {
         </article>
       </div>
 
-      <div class="section-heading section-heading--spaced">
-        <p class="eyebrow">Reviews</p>
-        <h2>What people say about ParTime</h2>
-      </div>
-      <div class="review-grid">
-        <article class="review-card">
-          <div class="review-rating" aria-label="5 out of 5">Rated 5/5</div>
-          <p>“The app felt really easy to use, and I liked being able to see everything in one place.”</p>
-          <strong>Jordan, client</strong>
-        </article>
-        <article class="review-card">
-          <div class="review-rating" aria-label="5 out of 5">Rated 5/5</div>
-          <p>“I could apply fast, and the notifications made it simple to keep track of what was happening.”</p>
-          <strong>Maya, student</strong>
-        </article>
-        <article class="review-card">
-          <div class="review-rating" aria-label="4 out of 5">Rated 4/5</div>
-          <p>“It feels trustworthy and clear. The live updates make the whole setup a lot more comfortable.”</p>
-          <strong>Ana, customer</strong>
-        </article>
-      </div>
     </section>
 
   `;
@@ -1858,7 +1835,7 @@ function renderClientDetailsForm() {
         <div class="form-grid onboarding-grid">
           <label>
             <span>Preferred name</span>
-            <input type="text" name="name" placeholder="Jordan Taylor" value="${routeMeta.mode === "edit" ? escapeHtml(client.name) : escapeHtml(onboarding.preferredName || "")}" required />
+            <input type="text" name="name" placeholder="First Last" value="${routeMeta.mode === "edit" ? escapeHtml(client.name) : escapeHtml(onboarding.preferredName || "")}" required />
           </label>
           <label>
             <span>Last name</span>
@@ -2018,7 +1995,7 @@ function renderWorkerDetailsForm() {
           <div class="form-grid onboarding-grid">
             <label>
               <span>Preferred name</span>
-              <input type="text" name="name" placeholder="Jordan Taylor" value="${routeMeta.mode === "edit" ? escapeHtml(worker.name) : escapeHtml(onboarding.preferredName || "")}" required />
+              <input type="text" name="name" placeholder="First Last" value="${routeMeta.mode === "edit" ? escapeHtml(worker.name) : escapeHtml(onboarding.preferredName || "")}" required />
             </label>
             <label>
               <span>Age range</span>
@@ -2771,28 +2748,6 @@ function bindCommonEvents() {
       const returnTo = pathForView(view, routeMeta);
       routeMeta = { returnTo };
       navigate("messages", { returnTo });
-    });
-  });
-
-  document.querySelectorAll("[data-action='open-client-profile']").forEach((button) => {
-    button.addEventListener("click", () => {
-      const session = readSession();
-      if (session?.role === "client") {
-        navigate("client-dashboard");
-        return;
-      }
-      navigate("onboard-client", { role: "client", stage: "register" });
-    });
-  });
-
-  document.querySelectorAll("[data-action='open-worker-profile']").forEach((button) => {
-    button.addEventListener("click", () => {
-      const session = readSession();
-      if (session?.role === "worker") {
-        navigate("worker-dashboard");
-        return;
-      }
-      navigate("onboard-worker", { role: "worker", stage: "register" });
     });
   });
 
@@ -3735,10 +3690,10 @@ function enhanceSignupFields() {
     const nameValue = String(nameField?.value || "").trim();
     const isEditing = routeMeta?.mode === "edit";
     if (nameField && !isEditing) {
-      if (!nameValue || nameValue === "Jordan Taylor") {
+      if (!nameValue || nameValue === "First Last") {
         nameField.value = "";
       }
-      nameField.placeholder = "Jordan Taylor";
+      nameField.placeholder = "First Last";
       nameField.autocomplete = "name";
     }
 

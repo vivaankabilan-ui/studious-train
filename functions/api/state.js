@@ -736,10 +736,10 @@ async function loadState(db) {
   );
 
   return {
-    updatedAt,
-    selectedClientId: clients[Object.keys(clients)[0]]?.id || "c1",
-    selectedWorkerId: workers[Object.keys(workers)[0]]?.id || "w1",
-    selectedParentId: parents[Object.keys(parents)[0]]?.id || "p1",
+    updatedAt: updatedAt || new Date().toISOString(),
+    selectedClientId: clients[Object.keys(clients)[0]]?.id || "",
+    selectedWorkerId: workers[Object.keys(workers)[0]]?.id || "",
+    selectedParentId: parents[Object.keys(parents)[0]]?.id || "",
     clients,
     workers,
     parents,
@@ -767,15 +767,10 @@ export async function onRequest(context) {
   if (request.method === "POST") {
     const state = await request.json();
     try {
-      await env.DB.exec("BEGIN");
       validateStateNames(state);
       await saveState(env.DB, state);
-      await env.DB.exec("COMMIT");
       return jsonResponse({ ok: true });
     } catch (error) {
-      try {
-        await env.DB.exec("ROLLBACK");
-      } catch {}
       return jsonResponse({ error: error?.message || "Unable to save state." }, { status: 500 });
     }
   }
@@ -790,17 +785,17 @@ function isValidPersonName(value) {
 }
 
 function validateStateNames(state) {
-  for (const client of state.clients || []) {
+  for (const client of Object.values(state.clients || {})) {
     if (client.name && !isValidPersonName(client.name)) {
       throw new Error(`Invalid client name for ${client.id || "unknown client"}.`);
     }
   }
-  for (const worker of state.workers || []) {
+  for (const worker of Object.values(state.workers || {})) {
     if (worker.name && !isValidPersonName(worker.name)) {
       throw new Error(`Invalid worker name for ${worker.id || "unknown worker"}.`);
     }
   }
-  for (const parent of state.parents || []) {
+  for (const parent of Object.values(state.parents || {})) {
     if (parent.name && !isValidPersonName(parent.name)) {
       throw new Error(`Invalid parent name for ${parent.id || "unknown parent"}.`);
     }

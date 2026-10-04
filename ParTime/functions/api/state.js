@@ -564,10 +564,17 @@ async function loadState(db) {
       };
     });
 
+  const updatedAt = latestTimestamp(
+    ...users.results.map((row) => row.updated_at),
+    ...jobs.results.map((row) => row.updated_at),
+    ...activities.results.map((row) => row.created_at)
+  );
+
   return {
-    selectedClientId: clients[Object.keys(clients)[0]]?.id || "c1",
-    selectedWorkerId: workers[Object.keys(workers)[0]]?.id || "w1",
-    selectedParentId: parents[Object.keys(parents)[0]]?.id || "p1",
+    updatedAt: updatedAt || new Date().toISOString(),
+    selectedClientId: clients[Object.keys(clients)[0]]?.id || "",
+    selectedWorkerId: workers[Object.keys(workers)[0]]?.id || "",
+    selectedParentId: parents[Object.keys(parents)[0]]?.id || "",
     clients,
     workers,
     parents,
@@ -596,14 +603,9 @@ export async function onRequest(context) {
       return jsonResponse({ error: `Duplicate email detected: ${duplicateEmail}` }, { status: 400 });
     }
     try {
-      await env.DB.exec("BEGIN");
       await saveState(env.DB, state);
-      await env.DB.exec("COMMIT");
       return jsonResponse({ ok: true });
     } catch (error) {
-      try {
-        await env.DB.exec("ROLLBACK");
-      } catch {}
       return jsonResponse({ error: error?.message || "Unable to save state." }, { status: 500 });
     }
   }
