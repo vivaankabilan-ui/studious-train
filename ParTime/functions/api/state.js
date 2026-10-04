@@ -100,19 +100,18 @@ async function clearTables(db) {
 }
 
 async function ensureNotificationTables(db) {
-  await db.exec(`
+  await db.prepare(`
     CREATE TABLE IF NOT EXISTS notification_states (
       user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
       role TEXT NOT NULL CHECK (role IN ('client', 'worker')),
       last_seen_at TEXT
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_notification_states_role ON notification_states(role);
-  `);
+    )
+  `).run();
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_notification_states_role ON notification_states(role)`).run();
 }
 
 async function ensureMessagingTables(db) {
-  await db.exec(`
+  await db.prepare(`
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
       job_id TEXT NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE,
@@ -123,8 +122,9 @@ async function ensureMessagingTables(db) {
       client_last_read_at TEXT,
       worker_last_read_at TEXT,
       last_message_at TEXT
-    );
-
+    )
+  `).run();
+  await db.prepare(`
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -132,14 +132,13 @@ async function ensureMessagingTables(db) {
       sender_role TEXT NOT NULL CHECK (sender_role IN ('client', 'worker')),
       content TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_conversations_job_id ON conversations(job_id);
-    CREATE INDEX IF NOT EXISTS idx_conversations_client_id ON conversations(client_id);
-    CREATE INDEX IF NOT EXISTS idx_conversations_worker_id ON conversations(worker_id);
-    CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
-    CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
-  `);
+    )
+  `).run();
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_conversations_job_id ON conversations(job_id)`).run();
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_conversations_client_id ON conversations(client_id)`).run();
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_conversations_worker_id ON conversations(worker_id)`).run();
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id)`).run();
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)`).run();
 }
 
 async function saveState(db, state) {
