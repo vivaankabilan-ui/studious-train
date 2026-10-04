@@ -22,42 +22,6 @@ function parseJson(value, fallback) {
   }
 }
 
-function normalizeEmail(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function duplicateEmailInState(state) {
-  const seen = new Map();
-  const records = [
-    ...(Object.values(state?.clients || {})),
-    ...(Object.values(state?.workers || {})),
-    ...(Object.values(state?.parents || {}))
-  ];
-
-  for (const record of records) {
-    const email = normalizeEmail(record.email);
-    if (!email) continue;
-    if (seen.has(email) && seen.get(email) !== record.id) return email;
-    seen.set(email, record.id);
-  }
-  return "";
-}
-
-async function ensureOptionalColumns(db) {
-  const tables = [
-    { table: "client_profiles", column: "ui_preferences" },
-    { table: "worker_profiles", column: "ui_preferences" }
-  ];
-
-  for (const { table, column } of tables) {
-    const info = await db.prepare(`PRAGMA table_info(${table})`).all();
-    const hasColumn = (info.results || []).some((row) => row.name === column);
-    if (!hasColumn) {
-      await db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT NOT NULL DEFAULT '{}'`);
-    }
-  }
-}
-
 function formatRoleStatus(role, active = true) {
   if (role === "worker") return active ? "active" : "pending";
   return active ? "active" : "pending";
@@ -81,6 +45,21 @@ function normalizeJobStatus(value) {
   return "open";
 }
 
+function normalizeMessageSenderRole(value) {
+  return String(value || "").toLowerCase() === "worker" ? "worker" : "client";
+}
+
+function latestTimestamp(...values) {
+  let latest = "";
+  for (const value of values) {
+    const time = Date.parse(value || "");
+    if (Number.isFinite(time) && (!latest || time > Date.parse(latest))) {
+      latest = value;
+    }
+  }
+  return latest;
+}
+
 function normalizeApplicationStatus(value) {
   const status = String(value || "applied").toLowerCase().replace(/\s+/g, "_");
   if (["applied", "accepted", "denied", "withdrawn", "next_timed"].includes(status)) return status;
@@ -101,6 +80,9 @@ function safeId(prefix, value) {
 
 async function clearTables(db) {
   const tables = [
+    "notification_states",
+    "messages",
+    "conversations",
     "activity_log",
     "ratings",
     "worker_rating_summary",
@@ -117,6 +99,49 @@ async function clearTables(db) {
   }
 }
 
+async function ensureNotificationTables(db) {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS notification_states (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('client', 'worker')),
+      last_seen_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_notification_states_role ON notification_states(role);
+  `);
+}
+
+async function ensureMessagingTables(db) {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS conversations (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE,
+      client_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      worker_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      client_last_read_at TEXT,
+      worker_last_read_at TEXT,
+      last_message_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      sender_role TEXT NOT NULL CHECK (sender_role IN ('client', 'worker')),
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_conversations_job_id ON conversations(job_id);
+    CREATE INDEX IF NOT EXISTS idx_conversations_client_id ON conversations(client_id);
+    CREATE INDEX IF NOT EXISTS idx_conversations_worker_id ON conversations(worker_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
+  `);
+}
+
 async function saveState(db, state) {
   await clearTables(db);
 
@@ -124,6 +149,8 @@ async function saveState(db, state) {
   const workers = Object.values(state.workers || {});
   const parents = Object.values(state.parents || {});
   const jobs = Array.isArray(state.jobs) ? state.jobs : [];
+  const conversations = Array.isArray(state.conversations) ? state.conversations : [];
+  const messages = Array.isArray(state.messages) ? state.messages : [];
   const parentEvents = Array.isArray(state.parentEvents) ? state.parentEvents : [];
 
   for (const client of clients) {
@@ -146,14 +173,23 @@ async function saveState(db, state) {
     ).run();
 
     await db.prepare(
-      `INSERT INTO client_profiles (user_id, preferred_currency, services_looking_for, default_location, ui_preferences)
-       VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO client_profiles (user_id, preferred_currency, services_looking_for, default_location)
+       VALUES (?, ?, ?, ?)`
     ).bind(
       client.id,
       client.preferredCurrency || "USD",
       JSON.stringify(client.typicalServices || []),
-      client.location || "",
-      JSON.stringify(client.uiPreferences || {})
+      client.location || ""
+    ).run();
+  }
+
+  for (const client of clients) {
+    await db.prepare(
+      `INSERT OR REPLACE INTO notification_states (user_id, role, last_seen_at)
+       VALUES (?, 'client', ?)`
+    ).bind(
+      client.id,
+      client.notificationSeenAt || ""
     ).run();
   }
 
@@ -178,9 +214,9 @@ async function saveState(db, state) {
 
     const parent = parents.find((item) => item.email === worker.parentEmail || item.linkedWorkerId === worker.id);
     await db.prepare(
-        `INSERT INTO worker_profiles (
-        user_id, photo_url, bio, age, school, parent_email, parent_confirmed, parent_user_id, services_offered, certifications, verified, parent_verification_code, parent_verification_sent_at, parent_verified_at, ui_preferences
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO worker_profiles (
+        user_id, photo_url, bio, age, school, parent_email, parent_confirmed, parent_user_id, services_offered, certifications, verified, parent_verification_code, parent_verification_sent_at, parent_verified_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       worker.id,
       worker.photo || "",
@@ -195,8 +231,17 @@ async function saveState(db, state) {
       toSqlBool(worker.parentConfirmed),
       worker.parentVerificationCode || "",
       worker.parentVerificationSentAt || "",
-      worker.parentVerifiedAt || "",
-      JSON.stringify(worker.uiPreferences || {})
+      worker.parentVerifiedAt || ""
+    ).run();
+  }
+
+  for (const worker of workers) {
+    await db.prepare(
+      `INSERT OR REPLACE INTO notification_states (user_id, role, last_seen_at)
+       VALUES (?, 'worker', ?)`
+    ).bind(
+      worker.id,
+      worker.notificationSeenAt || ""
     ).run();
   }
 
@@ -312,6 +357,99 @@ async function saveState(db, state) {
     }
   }
 
+  const conversationRows = [];
+  const conversationMap = new Map();
+  const existingConversationIds = new Set();
+  for (const conversation of conversations) {
+    if (!conversation || !conversation.id || !conversation.jobId || !conversation.clientId || !conversation.workerId) continue;
+    const normalized = {
+      id: conversation.id,
+      jobId: conversation.jobId,
+      clientId: conversation.clientId,
+      workerId: conversation.workerId,
+      createdAt: conversation.createdAt || conversation.updatedAt || new Date().toISOString(),
+      updatedAt: conversation.updatedAt || conversation.createdAt || new Date().toISOString(),
+      clientLastReadAt: conversation.clientLastReadAt || "",
+      workerLastReadAt: conversation.workerLastReadAt || "",
+      lastMessageAt: conversation.lastMessageAt || ""
+    };
+    conversationRows.push(normalized);
+    conversationMap.set(normalized.id, normalized);
+    existingConversationIds.add(normalized.jobId);
+  }
+
+  for (const job of jobs) {
+    const acceptedWorkerId = job.acceptedWorkerId || (job.applications || []).find((item) => item.status === "Accepted")?.workerId || "";
+    if (!acceptedWorkerId || existingConversationIds.has(job.id)) continue;
+    const createdAt = job.acceptedAt || job.completedAt || job.createdAt || new Date().toISOString();
+    const conversation = {
+      id: safeId("conv", job.id),
+      jobId: job.id,
+      clientId: job.clientId,
+      workerId: acceptedWorkerId,
+      createdAt,
+      updatedAt: createdAt,
+      clientLastReadAt: "",
+      workerLastReadAt: "",
+      lastMessageAt: ""
+    };
+    conversationRows.push(conversation);
+    conversationMap.set(conversation.id, conversation);
+  }
+
+  const messageRows = [];
+  for (const message of messages) {
+    const conversation = conversationMap.get(message.conversationId);
+    if (!conversation) continue;
+    const senderRole = normalizeMessageSenderRole(message.senderRole);
+    const allowedSenderId = senderRole === "worker" ? conversation.workerId : conversation.clientId;
+    if (String(message.senderId) !== String(allowedSenderId)) continue;
+    const normalized = {
+      id: message.id,
+      conversationId: conversation.id,
+      senderId: message.senderId,
+      senderRole,
+      content: String(message.content || ""),
+      createdAt: message.createdAt || new Date().toISOString()
+    };
+    messageRows.push(normalized);
+    const conversationStamp = latestTimestamp(conversation.lastMessageAt, normalized.createdAt, conversation.updatedAt);
+    conversation.lastMessageAt = conversationStamp;
+    conversation.updatedAt = conversationStamp || conversation.updatedAt;
+  }
+
+  for (const conversation of conversationRows) {
+    await db.prepare(
+      `INSERT OR REPLACE INTO conversations (
+        id, job_id, client_id, worker_id, created_at, updated_at, client_last_read_at, worker_last_read_at, last_message_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      conversation.id,
+      conversation.jobId,
+      conversation.clientId,
+      conversation.workerId,
+      conversation.createdAt,
+      conversation.updatedAt,
+      conversation.clientLastReadAt || null,
+      conversation.workerLastReadAt || null,
+      conversation.lastMessageAt || null
+    ).run();
+  }
+
+  for (const message of messageRows) {
+    await db.prepare(
+      `INSERT OR REPLACE INTO messages (id, conversation_id, sender_id, sender_role, content, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(
+      message.id,
+      message.conversationId,
+      message.senderId,
+      message.senderRole,
+      message.content,
+      message.createdAt
+    ).run();
+  }
+
   for (const worker of workers) {
     const workerRatings = Array.isArray(worker.ratings) ? worker.ratings : [];
     const count = workerRatings.length;
@@ -379,14 +517,7 @@ async function saveState(db, state) {
       state.selectedParentId || "p1",
       eventTypeToAction(event.type),
       event.workerId,
-      JSON.stringify({
-        message: event.message,
-        eventType: event.type,
-        emailTo: event.emailTo || "",
-        emailSubject: event.emailSubject || "",
-        emailStatus: event.emailStatus || "",
-        emailSentAt: event.emailSentAt || ""
-      }),
+      JSON.stringify({ message: event.message, eventType: event.type }),
       event.createdAt || new Date().toISOString()
     ).run();
   }
@@ -406,13 +537,51 @@ async function loadState(db) {
   const workerProfileMap = new Map(workerProfiles.results.map((row) => [row.user_id, row]));
   const parentProfiles = await db.prepare(`SELECT * FROM parent_profiles`).all();
   const parentProfileMap = new Map(parentProfiles.results.map((row) => [row.user_id, row]));
+  const notificationStates = await db.prepare(`SELECT * FROM notification_states`).all();
+  const notificationStateMap = new Map(notificationStates.results.map((row) => [row.user_id, row]));
+  const conversationRows = await db.prepare(`SELECT * FROM conversations ORDER BY created_at ASC`).all();
+  const conversationMap = new Map();
+  const messageRows = await db.prepare(`SELECT * FROM messages ORDER BY created_at ASC`).all();
+  const messagesByConversation = new Map();
+
+  for (const conversation of conversationRows.results) {
+    const normalized = {
+      id: conversation.id,
+      jobId: conversation.job_id,
+      clientId: conversation.client_id,
+      workerId: conversation.worker_id,
+      createdAt: conversation.created_at || "",
+      updatedAt: conversation.updated_at || conversation.created_at || "",
+      clientLastReadAt: conversation.client_last_read_at || "",
+      workerLastReadAt: conversation.worker_last_read_at || "",
+      lastMessageAt: conversation.last_message_at || ""
+    };
+    conversationMap.set(normalized.id, normalized);
+    messagesByConversation.set(normalized.id, []);
+  }
+
+  for (const message of messageRows.results) {
+    const conversation = conversationMap.get(message.conversation_id);
+    if (!conversation) continue;
+    const normalized = {
+      id: message.id,
+      conversationId: message.conversation_id,
+      senderId: message.sender_id,
+      senderRole: message.sender_role || "client",
+      content: message.content,
+      createdAt: message.created_at || ""
+    };
+    messagesByConversation.get(conversation.id).push(normalized);
+    conversation.lastMessageAt = latestTimestamp(conversation.lastMessageAt, normalized.createdAt, conversation.updatedAt);
+    conversation.updatedAt = latestTimestamp(conversation.updatedAt, normalized.createdAt, conversation.lastMessageAt);
+  }
 
   for (const user of users.results) {
     if (user.role === "client") {
       const profile = clientProfileMap.get(user.id) || {};
+      const notificationState = notificationStateMap.get(user.id) || {};
       clients[user.id] = {
         id: user.id,
-        role: "client",
         name: user.name,
         email: user.email,
         phone: user.phone || "",
@@ -424,17 +593,16 @@ async function loadState(db) {
         passwordHash: user.password_hash || "",
         passwordSalt: user.password_salt || "",
         typicalServices: parseJson(profile.services_looking_for, []),
-        preferredCurrency: profile.preferred_currency || "USD"
-        ,
-        uiPreferences: parseJson(profile.ui_preferences, {})
+        preferredCurrency: profile.preferred_currency || "USD",
+        notificationSeenAt: notificationState.last_seen_at || ""
       };
     }
 
     if (user.role === "worker") {
       const profile = workerProfileMap.get(user.id) || {};
+      const notificationState = notificationStateMap.get(user.id) || {};
       workers[user.id] = {
         id: user.id,
-        role: "worker",
         name: user.name,
         email: user.email,
         phone: user.phone || "",
@@ -456,7 +624,7 @@ async function loadState(db) {
         parentVerificationCode: profile.parent_verification_code || "",
         parentVerificationSentAt: profile.parent_verification_sent_at || "",
         parentVerifiedAt: profile.parent_verified_at || "",
-        uiPreferences: parseJson(profile.ui_preferences, {}),
+        notificationSeenAt: notificationState.last_seen_at || "",
         ratings: [],
         nextTimes: []
       };
@@ -466,7 +634,6 @@ async function loadState(db) {
       const profile = parentProfileMap.get(user.id) || {};
       parents[user.id] = {
         id: user.id,
-        role: "parent",
         name: user.name,
         email: user.email,
         emailVerificationCode: user.email_verification_code || "",
@@ -554,19 +721,17 @@ async function loadState(db) {
       return {
         id: activity.id,
         workerId: activity.entity_id || metadata.workerId || "",
-        type: metadata.eventType || activity.action_type.replace(/_/g, " "),
+        type: activity.action_type.replace(/_/g, " "),
         message: metadata.message || "",
-        emailTo: metadata.emailTo || "",
-        emailSubject: metadata.emailSubject || "",
-        emailStatus: metadata.emailStatus || "",
-        emailSentAt: metadata.emailSentAt || "",
-        createdAt: activity.created_at
+      createdAt: activity.created_at
       };
     });
 
   const updatedAt = latestTimestamp(
     ...users.results.map((row) => row.updated_at),
     ...jobs.results.map((row) => row.updated_at),
+    ...conversationRows.results.map((row) => row.updated_at || row.created_at),
+    ...messageRows.results.map((row) => row.created_at),
     ...activities.results.map((row) => row.created_at)
   );
 
@@ -579,6 +744,8 @@ async function loadState(db) {
     workers,
     parents,
     jobs: jobList,
+    conversations: Array.from(conversationMap.values()),
+    messages: Array.from(messagesByConversation.values()).flat(),
     parentEvents
   };
 }
@@ -589,7 +756,8 @@ export async function onRequest(context) {
     return jsonResponse({ error: "D1 database binding missing." }, { status: 500 });
   }
 
-  await ensureOptionalColumns(env.DB);
+  await ensureMessagingTables(env.DB);
+  await ensureNotificationTables(env.DB);
 
   if (request.method === "GET") {
     const state = await loadState(env.DB);
@@ -598,11 +766,8 @@ export async function onRequest(context) {
 
   if (request.method === "POST") {
     const state = await request.json();
-    const duplicateEmail = duplicateEmailInState(state);
-    if (duplicateEmail) {
-      return jsonResponse({ error: `Duplicate email detected: ${duplicateEmail}` }, { status: 400 });
-    }
     try {
+      validateStateNames(state);
       await saveState(env.DB, state);
       return jsonResponse({ ok: true });
     } catch (error) {
@@ -611,4 +776,28 @@ export async function onRequest(context) {
   }
 
   return jsonResponse({ error: "Method not allowed." }, { status: 405 });
+}
+
+function isValidPersonName(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return false;
+  return /^[\p{L}]+(?:[ -][\p{L}]+)*$/u.test(normalized);
+}
+
+function validateStateNames(state) {
+  for (const client of Object.values(state.clients || {})) {
+    if (client.name && !isValidPersonName(client.name)) {
+      throw new Error(`Invalid client name for ${client.id || "unknown client"}.`);
+    }
+  }
+  for (const worker of Object.values(state.workers || {})) {
+    if (worker.name && !isValidPersonName(worker.name)) {
+      throw new Error(`Invalid worker name for ${worker.id || "unknown worker"}.`);
+    }
+  }
+  for (const parent of Object.values(state.parents || {})) {
+    if (parent.name && !isValidPersonName(parent.name)) {
+      throw new Error(`Invalid parent name for ${parent.id || "unknown parent"}.`);
+    }
+  }
 }
