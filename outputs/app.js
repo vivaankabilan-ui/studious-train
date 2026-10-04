@@ -27,6 +27,7 @@ const defaultPhotos = {
 
 const API_STATE_ENDPOINT = "/api/state";
 const AUTH_EMAIL_ENDPOINT = "/api/auth-email";
+const FEEDBACK_EMAIL_ENDPOINT = "/api/feedback";
 const SESSION_KEY = "partime-auth-session-v1";
 const ONBOARDING_EXPIRES_IN_MS = 30 * 60 * 1000;
 const AGE_RANGE_OPTIONS = [
@@ -355,6 +356,26 @@ async function sendVerificationEmail({ to, code, role }) {
   }
   if (payload.status === "not_configured") {
     throw new Error(payload.error || "Email sending is not configured yet.");
+  }
+  return payload;
+}
+
+async function sendWebsiteFeedback({ message, senderName = "", senderEmail = "" }) {
+  const response = await fetch(FEEDBACK_EMAIL_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      message,
+      senderName,
+      senderEmail
+    })
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || "We could not send your feedback right now.");
   }
   return payload;
 }
@@ -1234,6 +1255,7 @@ function createLinkedAccount(worker) {
 function pathForView(nextView, meta = {}) {
   if (nextView === "messages" && meta.conversationId) return `/messages/${encodeURIComponent(meta.conversationId)}`;
   if (nextView === "notifications") return "/notifications";
+  if (nextView === "review") return "/review";
   if (nextView === "client-dashboard") return "/client";
   if (nextView === "worker-dashboard") return "/student";
   if (nextView === "forgot-password") return "/forgot-password";
@@ -1251,6 +1273,7 @@ function routeFromLocation() {
   }
   if (pathname === "/messages") return { view: "messages", meta: {} };
   if (pathname === "/notifications") return { view: "notifications", meta: {} };
+  if (pathname === "/review") return { view: "review", meta: {} };
   if (pathname === "/client") return { view: "client-dashboard", meta: {} };
   if (pathname === "/student") return { view: "worker-dashboard", meta: {} };
   if (pathname === "/forgot-password") return { view: "forgot-password", meta: {} };
@@ -1350,6 +1373,7 @@ function renderHeader() {
         ${logoMenuOpen ? `
           <div class="logo-menu" role="menu" aria-label="ParTime menu">
             <button class="logo-menu-item" type="button" data-view="landing">Home page</button>
+            <button class="logo-menu-item" type="button" data-view="review">Review</button>
             ${session
               ? `
                 <button class="logo-menu-item" type="button" data-action="logout">Sign out</button>
@@ -1378,8 +1402,47 @@ function renderView() {
   if (view === "worker-dashboard") return renderWorkerDashboard();
   if (view === "notifications") return renderNotificationsView();
   if (view === "messages") return renderMessagesView();
+  if (view === "review") return renderReviewPage();
   if (view === "settings") return renderSettings();
   return renderLanding();
+}
+
+function renderReviewPage() {
+  const session = readSession();
+  const currentUser = session?.role === "client" ? getClient(session.id) : session?.role === "worker" ? getWorker(session.id) : null;
+  const success = routeMeta.feedbackSent ? "Thank you. Your feedback has been sent." : "";
+  return `
+    <section class="feedback-shell">
+      <div class="feedback-card panel">
+        <div class="feedback-copy">
+          <p class="eyebrow">ParTime feedback</p>
+          <h1>Please review our website and share with us some feedback.</h1>
+          <p class="muted">Your notes help make ParTime clearer, safer, and easier for the Ecolint - La Chataigneraie community to use.</p>
+        </div>
+        <form class="feedback-form" id="feedbackForm">
+          ${success ? `<div class="form-success">${escapeHtml(success)}</div>` : ""}
+          <label>
+            <span>Your feedback</span>
+            <textarea name="message" rows="8" placeholder="Write what felt helpful, confusing, missing, or anything you would like improved." required></textarea>
+          </label>
+          <div class="feedback-meta-grid">
+            <label>
+              <span>Name</span>
+              <input type="text" name="senderName" placeholder="Optional" value="${escapeHtml(currentUser?.name || "")}" />
+            </label>
+            <label>
+              <span>Email</span>
+              <input type="email" name="senderEmail" placeholder="Optional" value="${escapeHtml(currentUser?.email || "")}" />
+            </label>
+          </div>
+          <div class="form-actions">
+            <button class="primary" type="submit">Send feedback</button>
+            <button class="secondary" type="button" data-view="landing">Back to home</button>
+          </div>
+        </form>
+      </div>
+    </section>
+  `;
 }
 
 function renderNotificationsView() {
@@ -2836,6 +2899,33 @@ function bindViewEvents() {
   if (view === "worker-dashboard") bindWorkerDashboard();
   if (view === "notifications") bindNotificationsView();
   if (view === "messages") bindMessagesView();
+  if (view === "review") bindReviewPage();
+}
+
+function bindReviewPage() {
+  const form = document.querySelector("#feedbackForm");
+  if (!form) return;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(form);
+    const message = String(formData.get("message") || "").trim();
+    const senderName = String(formData.get("senderName") || "").trim();
+    const senderEmail = normalizeEmail(formData.get("senderEmail"));
+    if (message.length < 5) {
+      showFormError(form, "Please write a little more feedback before sending.");
+      return;
+    }
+    const submitButton = form.querySelector("button[type='submit']");
+    if (submitButton) submitButton.disabled = true;
+    try {
+      await sendWebsiteFeedback({ message, senderName, senderEmail });
+      routeMeta = { feedbackSent: true };
+      navigate("review", { feedbackSent: true });
+    } catch (error) {
+      if (submitButton) submitButton.disabled = false;
+      showFormError(form, error.message || "We could not send your feedback right now.");
+    }
+  });
 }
 
 function bindNotificationsView() {
@@ -3652,7 +3742,7 @@ async function bootstrap() {
   state = (await loadState()) || createDefaultState();
   applyRouteFromLocation(true);
   const session = readSession();
-  const publicViews = new Set(["landing", "login", "create-account", "forgot-password", "onboard-client", "onboard-worker", "messages"]);
+  const publicViews = new Set(["landing", "login", "create-account", "forgot-password", "onboard-client", "onboard-worker", "messages", "review"]);
   if (view === "messages" && !session) {
     // keep the deep-link page visible without exposing chat data
   } else if (session) {

@@ -1307,6 +1307,48 @@ h4 {
   margin-bottom: 22px;
 }
 
+.feedback-shell {
+  display: grid;
+  min-height: calc(100svh - 86px);
+  place-items: center;
+  padding: clamp(28px, 6vw, 76px) clamp(16px, 5vw, 72px);
+  background:
+    radial-gradient(circle at 18% 18%, rgba(24, 58, 97, 0.08), transparent 28%),
+    linear-gradient(180deg, #ffffff 0%, #f6f7f9 100%);
+}
+
+.feedback-card {
+  display: grid;
+  width: min(980px, 100%);
+  grid-template-columns: minmax(260px, 0.85fr) minmax(0, 1.15fr);
+  gap: clamp(22px, 5vw, 56px);
+  align-items: start;
+  padding: clamp(24px, 5vw, 54px);
+  border-radius: 34px;
+}
+
+.feedback-copy h1 {
+  max-width: 520px;
+  font-size: clamp(2.1rem, 6vw, 4.6rem);
+  line-height: 0.98;
+}
+
+.feedback-form {
+  display: grid;
+  gap: 16px;
+}
+
+.feedback-form textarea {
+  min-height: 210px;
+  resize: vertical;
+}
+
+.feedback-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
 .notification-panel {
   margin-bottom: 18px;
   padding: 18px;
@@ -2662,6 +2704,8 @@ textarea:focus {
   .step-row,
   .step-row--reverse,
   .review-grid,
+  .feedback-card,
+  .feedback-meta-grid,
   .form-grid,
   .form-grid.compact,
   .profile-detail-grid,
