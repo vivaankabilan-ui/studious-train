@@ -1,17 +1,17 @@
 :root {
-  --ink: #0f2236;
-  --muted: #5b6470;
-  --soft: #ffffff;
+  --ink: #10212a;
+  --muted: #60737c;
+  --soft: #f3fbf8;
   --surface: #ffffff;
-  --line: #d7dce2;
-  --green: #183a61;
-  --green-dark: #0f2236;
-  --blue: #183a61;
-  --blue-soft: #edf1f7;
-  --aqua: #f3f5f8;
-  --amber: #c6ccd4;
-  --coral: #8a96a6;
-  --shadow: 0 12px 26px rgba(15, 34, 54, 0.08);
+  --line: #cfe3dd;
+  --green: #16835f;
+  --green-dark: #0b6b4f;
+  --blue: #2568c7;
+  --blue-soft: #eaf3ff;
+  --aqua: #e7faf4;
+  --amber: #f7b84b;
+  --coral: #f07867;
+  --shadow: 0 12px 26px rgba(22, 131, 95, 0.1);
   --radius: 22px;
   color-scheme: light;
 }
@@ -23,8 +23,8 @@
 body {
   margin: 0;
   background:
-    linear-gradient(180deg, #ffffff 0%, #f6f7f9 100%),
-    repeating-linear-gradient(135deg, rgba(15, 34, 54, 0.014) 0 1px, transparent 1px 26px);
+    linear-gradient(180deg, #f4fcf8 0%, #ffffff 55%, #eef9f4 100%),
+    repeating-linear-gradient(135deg, rgba(22, 131, 95, 0.018) 0 1px, transparent 1px 26px);
   color: var(--ink);
   font-family:
     Aptos, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -62,7 +62,7 @@ img {
   gap: 18px;
   align-items: center;
   padding: 14px clamp(16px, 4vw, 56px);
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(248, 253, 250, 0.94);
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(18px);
 }
@@ -104,12 +104,12 @@ img {
   height: 42px;
   place-items: center;
   border-radius: 18px;
-  background: linear-gradient(180deg, #214269 0%, #0f2236 100%);
+  background: linear-gradient(180deg, #1a936f 0%, #0b6b4f 100%);
   color: #fff;
   font-size: 0.78rem;
   font-weight: 800;
   letter-spacing: 0;
-  box-shadow: 0 10px 22px rgba(15, 34, 54, 0.18);
+  box-shadow: 0 10px 22px rgba(22, 131, 95, 0.2);
   position: relative;
   animation: bobble 6s ease-in-out infinite;
 }
@@ -198,7 +198,7 @@ main {
   align-items: center;
   min-height: 78svh;
   padding: clamp(34px, 6vw, 78px) clamp(18px, 5vw, 72px);
-  background: linear-gradient(180deg, #ffffff 0%, #f6f7f9 100%);
+  background: linear-gradient(180deg, #eefaf5 0%, #ffffff 70%, #f4fcf8 100%);
   border-bottom: 1px solid var(--line);
   position: relative;
   overflow: clip;
@@ -289,9 +289,9 @@ h4 {
   border: 1px solid rgba(15, 34, 54, 0.14);
   border-radius: 34%;
   background:
-    radial-gradient(circle at 28% 24%, rgba(255, 255, 255, 0.26), transparent 28%),
-    linear-gradient(180deg, #214269 0%, #0f2236 100%);
-  box-shadow: 0 26px 60px rgba(15, 34, 54, 0.18);
+    radial-gradient(circle at 28% 24%, rgba(255, 255, 255, 0.3), transparent 28%),
+    linear-gradient(180deg, #1a936f 0%, #0b6b4f 100%);
+  box-shadow: 0 26px 60px rgba(22, 131, 95, 0.22);
   animation: bobble 7s ease-in-out infinite;
 }
 
@@ -1313,8 +1313,8 @@ h4 {
   place-items: center;
   padding: clamp(28px, 6vw, 76px) clamp(16px, 5vw, 72px);
   background:
-    radial-gradient(circle at 18% 18%, rgba(24, 58, 97, 0.08), transparent 28%),
-    linear-gradient(180deg, #ffffff 0%, #f6f7f9 100%);
+    radial-gradient(circle at 18% 18%, rgba(22, 131, 95, 0.1), transparent 28%),
+    linear-gradient(180deg, #eefaf5 0%, #ffffff 100%);
 }
 
 .feedback-card {
