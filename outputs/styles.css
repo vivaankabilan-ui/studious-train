@@ -691,7 +691,8 @@ h4 {
 
 .step-story {
   display: grid;
-  gap: 22px;
+  gap: 8px;
+  position: relative;
 }
 
 .step-row {
@@ -713,6 +714,37 @@ h4 {
 .step-row:hover {
   transform: translateY(-1px);
   box-shadow: 0 10px 20px rgba(22, 48, 57, 0.07);
+}
+
+.step-connector {
+  display: grid;
+  height: clamp(58px, 8vw, 96px);
+  margin: -4px clamp(12px, 6vw, 74px);
+  pointer-events: none;
+  place-items: center;
+}
+
+.step-connector svg {
+  width: min(760px, 92%);
+  height: 100%;
+  overflow: visible;
+}
+
+.step-connector path {
+  fill: none;
+  stroke: rgba(11, 107, 79, 0.74);
+  stroke-width: 8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 8px 12px rgba(22, 131, 95, 0.1));
+}
+
+.step-connector .connector-arrow {
+  stroke-width: 7;
+}
+
+.step-connector--two path {
+  stroke: rgba(37, 104, 199, 0.52);
 }
 
 .step-row--reverse {
@@ -2620,6 +2652,11 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
+  .step-connector {
+    height: 54px;
+    margin: -2px 18px;
+  }
+
   .review-grid {
     grid-template-columns: 1fr;
   }
@@ -2716,6 +2753,15 @@ textarea:focus {
 
   .hero-scene__stage {
     min-height: 380px;
+  }
+
+  .step-connector {
+    height: 44px;
+    margin: -4px 8px;
+  }
+
+  .step-connector path {
+    stroke-width: 10;
   }
 
   .hero-visual--logo {

@@ -1623,6 +1623,12 @@ function renderLanding() {
             <p class="step-note">Create your listing in minutes and see it appear in the public feed.</p>
           </div>
         </article>
+        <div class="step-connector step-connector--one" aria-hidden="true">
+          <svg viewBox="0 0 900 150" role="presentation">
+            <path d="M44 24 C126 126 302 116 418 82 C557 42 692 54 822 118"></path>
+            <path class="connector-arrow" d="M775 112 C802 116 821 118 846 130 C826 105 817 89 812 64"></path>
+          </svg>
+        </div>
         <article class="step-row step-row--reverse">
           <div class="step-visual step-visual--apply" aria-hidden="true">
             <div class="visual-card visual-card--feed">
@@ -1665,6 +1671,12 @@ function renderLanding() {
             <p class="step-note">Filter by category and apply from a live feed that updates instantly.</p>
           </div>
         </article>
+        <div class="step-connector step-connector--two" aria-hidden="true">
+          <svg viewBox="0 0 900 150" role="presentation">
+            <path d="M844 22 C756 130 580 114 470 84 C326 44 188 56 72 122"></path>
+            <path class="connector-arrow" d="M118 114 C92 118 74 121 50 134 C69 107 77 91 81 66"></path>
+          </svg>
+        </div>
         <article class="step-row">
           <div class="step-visual step-visual--monitor" aria-hidden="true">
             <div class="visual-card visual-card--monitor">
