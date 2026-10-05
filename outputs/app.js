@@ -1599,7 +1599,7 @@ function renderLanding() {
     <section class="section-band">
       <div class="section-heading">
         <p class="eyebrow">How it works</p>
-        <h2>Simple flows for every account type</h2>
+        <h2>Start small, help locally, and build trust fast</h2>
       </div>
       <div class="step-story">
         <article class="step-row">
@@ -1621,8 +1621,8 @@ function renderLanding() {
           <div class="step-copy">
             <span class="number">1</span>
             <p class="step-kicker">POST A JOB</p>
-            <h3 class="step-title">Have a job to be done?</h3>
-            <p class="step-note">Create your listing in minutes and see it appear in the public feed.</p>
+            <h3 class="step-title">Turn everyday tasks into easy local help.</h3>
+            <p class="step-note">Post once, set your pay, and let trusted students nearby discover the opportunity right away.</p>
           </div>
         </article>
         <div class="step-connector step-connector--one" aria-hidden="true">
@@ -1669,8 +1669,8 @@ function renderLanding() {
           <div class="step-copy">
             <span class="number">2</span>
             <p class="step-kicker">FIND WORK</p>
-            <h3 class="step-title">Find nearby work that fits your skills.</h3>
-            <p class="step-note">Filter by category and apply from a live feed that updates instantly.</p>
+            <h3 class="step-title">Find work that fits your skills and schedule.</h3>
+            <p class="step-note">Students can browse real local jobs, choose what feels right, and apply in just a tap.</p>
           </div>
         </article>
         <div class="step-connector step-connector--two" aria-hidden="true">
@@ -1703,8 +1703,8 @@ function renderLanding() {
           <div class="step-copy">
             <span class="number">3</span>
             <p class="step-kicker">STAY IN THE LOOP</p>
-            <h3 class="step-title">Stay in the loop from request to finish.</h3>
-            <p class="step-note">Notifications keep the progress clear without getting in the way.</p>
+            <h3 class="step-title">Keep every step clear, friendly, and organized.</h3>
+            <p class="step-note">Notifications, ratings, and job updates help everyone feel confident from request to finish.</p>
           </div>
         </article>
       </div>
