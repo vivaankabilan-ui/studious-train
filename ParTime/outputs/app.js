@@ -1373,11 +1373,11 @@ function renderHeader() {
         ${logoMenuOpen ? `
           <div class="logo-menu" role="menu" aria-label="ParTime menu">
             <button class="logo-menu-item" type="button" data-view="landing">Home page</button>
-            <button class="logo-menu-item" type="button" data-view="review">Review</button>
             ${session
               ? `
                 <button class="logo-menu-item" type="button" data-action="logout">Sign out</button>
                 <button class="logo-menu-item" type="button" data-view="settings">Settings</button>
+                <button class="logo-menu-item" type="button" data-view="review">Review</button>
               `
               : `
                 <button class="logo-menu-item" type="button" data-view="login">Sign in</button>
@@ -3742,7 +3742,7 @@ async function bootstrap() {
   state = (await loadState()) || createDefaultState();
   applyRouteFromLocation(true);
   const session = readSession();
-  const publicViews = new Set(["landing", "login", "create-account", "forgot-password", "onboard-client", "onboard-worker", "messages", "review"]);
+  const publicViews = new Set(["landing", "login", "create-account", "forgot-password", "onboard-client", "onboard-worker", "messages"]);
   if (view === "messages" && !session) {
     // keep the deep-link page visible without exposing chat data
   } else if (session) {
@@ -3762,6 +3762,9 @@ async function bootstrap() {
       clearSession();
       if (view !== "messages") view = "login";
     }
+  } else if (view === "review") {
+    routeMeta = { loginNotice: "Please sign in to leave a review." };
+    view = "login";
   } else if (!publicViews.has(view)) {
     view = "landing";
   }
