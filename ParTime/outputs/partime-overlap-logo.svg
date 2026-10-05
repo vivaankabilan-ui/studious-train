@@ -9,17 +9,13 @@
       <stop offset="0" stop-color="#1a936f"/>
       <stop offset="1" stop-color="#0b6b4f"/>
     </linearGradient>
-    <linearGradient id="white-fill" x1="198" y1="190" x2="420" y2="414" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#f3fbf8"/>
-    </linearGradient>
   </defs>
 
   <rect width="512" height="512" rx="112" fill="#f4fcf8"/>
 
   <g filter="url(#soft-shadow)">
     <rect x="62" y="82" width="226" height="226" rx="54" fill="url(#green-fill)"/>
-    <rect x="224" y="204" width="226" height="226" rx="54" fill="url(#white-fill)" stroke="#cfe3dd" stroke-width="10"/>
+    <rect x="224" y="204" width="226" height="226" rx="54" fill="#ffffff" stroke="#cfe3dd" stroke-width="10"/>
   </g>
 
   <path d="M224 204h36c15.5 0 28 12.5 28 28v76h-64V204z" fill="#0a5f46" opacity="0.16"/>
