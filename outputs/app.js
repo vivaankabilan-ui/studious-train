@@ -1364,7 +1364,9 @@ function renderHeader() {
     <header class="topbar">
       <div class="brand-shell">
         <button class="brand" type="button" data-action="toggle-logo-menu" aria-expanded="${logoMenuOpen ? "true" : "false"}" aria-label="Open ParTime menu">
-          <span class="brand-mark">PT</span>
+          <span class="brand-mark" aria-hidden="true">
+            <img src="/partime-overlap-logo.svg" alt="" />
+          </span>
           <span>
             <strong>ParTime</strong>
             <small>Student services marketplace</small>
@@ -1566,7 +1568,7 @@ function renderHeroScene() {
   return `
     <figure class="hero-visual hero-visual--logo" aria-label="ParTime logo">
       <div class="hero-logo-card">
-        <span class="hero-logo-mark">PT</span>
+        <img class="hero-logo-mark" src="/partime-overlap-logo.svg" alt="ParTime PT logo" />
       </div>
     </figure>
   `;
