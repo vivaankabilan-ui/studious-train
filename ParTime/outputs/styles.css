@@ -691,7 +691,7 @@ h4 {
 
 .step-story {
   display: grid;
-  gap: 8px;
+  gap: 18px;
   position: relative;
 }
 
@@ -718,8 +718,8 @@ h4 {
 
 .step-connector {
   display: grid;
-  height: clamp(58px, 8vw, 96px);
-  margin: -4px clamp(12px, 6vw, 74px);
+  height: clamp(96px, 12vw, 150px);
+  margin: 2px clamp(18px, 7vw, 96px);
   pointer-events: none;
   place-items: center;
 }
@@ -2653,8 +2653,8 @@ textarea:focus {
   }
 
   .step-connector {
-    height: 54px;
-    margin: -2px 18px;
+    height: 82px;
+    margin: 4px 24px;
   }
 
   .review-grid {
@@ -2756,8 +2756,8 @@ textarea:focus {
   }
 
   .step-connector {
-    height: 44px;
-    margin: -4px 8px;
+    height: 68px;
+    margin: 2px 12px;
   }
 
   .step-connector path {
