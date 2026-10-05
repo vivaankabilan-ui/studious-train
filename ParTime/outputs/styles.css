@@ -692,7 +692,7 @@ h4 {
 
 .step-story {
   display: grid;
-  gap: 18px;
+  gap: 32px;
   position: relative;
 }
 
@@ -745,8 +745,8 @@ h4 {
 
 .step-connector {
   display: grid;
-  height: clamp(96px, 12vw, 150px);
-  margin: 2px clamp(18px, 7vw, 96px);
+  height: clamp(150px, 17vw, 230px);
+  margin: 18px clamp(28px, 9vw, 128px);
   pointer-events: none;
   place-items: center;
 }
@@ -760,14 +760,22 @@ h4 {
 .step-connector path {
   fill: none;
   stroke: rgba(11, 107, 79, 0.74);
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
   stroke-width: 8;
   stroke-linecap: round;
   stroke-linejoin: round;
   filter: drop-shadow(0 8px 12px rgba(22, 131, 95, 0.1));
+  transition: stroke-dashoffset 1100ms cubic-bezier(0.65, 0, 0.2, 1);
 }
 
 .step-connector .connector-arrow {
+  transition-delay: 720ms;
   stroke-width: 7;
+}
+
+.step-connector.is-visible path {
+  stroke-dashoffset: 0;
 }
 
 .step-connector--two path {
@@ -2689,8 +2697,8 @@ textarea:focus {
   }
 
   .step-connector {
-    height: 82px;
-    margin: 4px 24px;
+    height: 118px;
+    margin: 12px 28px;
   }
 
   .review-grid {
@@ -2792,8 +2800,8 @@ textarea:focus {
   }
 
   .step-connector {
-    height: 68px;
-    margin: 2px 12px;
+    height: 92px;
+    margin: 8px 12px;
   }
 
   .step-connector path {
@@ -2982,6 +2990,11 @@ textarea:focus {
 
   .hero-visual img {
     animation: none;
+  }
+
+  .step-connector path {
+    stroke-dashoffset: 0;
+    transition: none;
   }
 
   .trust-row span,

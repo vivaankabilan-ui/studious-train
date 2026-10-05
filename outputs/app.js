@@ -1319,7 +1319,28 @@ function render() {
   `;
   bindCommonEvents();
   bindViewEvents();
+  bindStepConnectorAnimations();
   syncMessagesPolling();
+}
+
+function bindStepConnectorAnimations() {
+  const connectors = Array.from(document.querySelectorAll(".step-connector"));
+  if (!connectors.length) return;
+  if (!("IntersectionObserver" in window)) {
+    connectors.forEach((connector) => connector.classList.add("is-visible"));
+    return;
+  }
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        entry.target.classList.add("is-visible");
+        observer.unobserve(entry.target);
+      });
+    },
+    { rootMargin: "0px 0px -18% 0px", threshold: 0.32 }
+  );
+  connectors.forEach((connector) => observer.observe(connector));
 }
 
 function renderProfileModal() {
@@ -1627,8 +1648,8 @@ function renderLanding() {
         </article>
         <div class="step-connector step-connector--one" aria-hidden="true">
           <svg viewBox="0 0 900 150" role="presentation">
-            <path d="M44 24 C126 126 302 116 418 82 C557 42 692 54 822 118"></path>
-            <path class="connector-arrow" d="M775 112 C802 116 821 118 846 130 C826 105 817 89 812 64"></path>
+            <path pathLength="1" d="M44 24 C126 126 302 116 418 82 C557 42 692 54 822 118"></path>
+            <path pathLength="1" class="connector-arrow" d="M775 112 C802 116 821 118 846 130 C826 105 817 89 812 64"></path>
           </svg>
         </div>
         <article class="step-row step-row--reverse">
@@ -1675,8 +1696,8 @@ function renderLanding() {
         </article>
         <div class="step-connector step-connector--two" aria-hidden="true">
           <svg viewBox="0 0 900 150" role="presentation">
-            <path d="M844 22 C756 130 580 114 470 84 C326 44 188 56 72 122"></path>
-            <path class="connector-arrow" d="M118 114 C92 118 74 121 50 134 C69 107 77 91 81 66"></path>
+            <path pathLength="1" d="M844 22 C756 130 580 114 470 84 C326 44 188 56 72 122"></path>
+            <path pathLength="1" class="connector-arrow" d="M118 114 C92 118 74 121 50 134 C69 107 77 91 81 66"></path>
           </svg>
         </div>
         <article class="step-row">
